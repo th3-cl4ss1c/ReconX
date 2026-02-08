@@ -59,7 +59,7 @@ reconx example.com --debug
 
 ## Внешние инструменты
 
-ReconX использует утилиты, которые скачиваются в `~/.cache/reconx/bin`:
+При первом запуске ReconX автоматически скачивает все нужные утилиты в `~/.cache/reconx/bin` (готовые бинари с GitHub Releases, без Go). Если загрузка не удалась — пробует `go install` как запасной вариант.
 
 - **DNS/enum**: subfinder, shuffledns, massdns, dnsx
 - **Сканирование**: smap, naabu, nmap
