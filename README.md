@@ -20,10 +20,10 @@ pipx install --editable .
 Обновление:
 
 ```bash
-pipx upgrade reconx
-# или
-pipx reinstall git+https://github.com/th3-cl4ss1c/ReconX.git
+pipx reinstall reconx
 ```
+
+Если установлено с GitHub — pipx подтянет последний коммит. Чтобы принудительно переустановить поверх существующей установки: `pipx install --force git+https://github.com/th3-cl4ss1c/ReconX.git`
 
 Быстрый старт для разработки:
 
