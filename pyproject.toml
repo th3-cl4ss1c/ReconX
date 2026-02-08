@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reconx"
+version = "0.1.0"
+description = "Модульный CLI-инструмент ReconX для подготовки структуры разведки"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+  { name = "ReconX Team" }
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "requests>=2.25.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/th3-cl4ss1c/ReconX"
+Repository = "https://github.com/th3-cl4ss1c/ReconX"
+
+[project.scripts]
+reconx = "reconx.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+reconx = ["data/resolvers.txt"]
+

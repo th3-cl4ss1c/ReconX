@@ -1,0 +1,6 @@
+# Конфигурация провайдеров для ReconX
+# Скопируйте в ~/.config/reconx/provider-config.yaml
+
+hunter_io: [your_hunter_api_key]
+snusbase: [your_snusbase_api_key]
+deepseek_api: [your_deepseek_api_key]

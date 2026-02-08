@@ -1,0 +1,11 @@
+.venv
+venv/
+*.pyc
+__pycache__/
+*.egg-info/
+build/
+dist/
+target-list.txt
+.cursor/
+/data/
+step-by-step.ipynb
