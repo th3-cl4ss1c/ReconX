@@ -466,19 +466,6 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
     except TimeoutError as error:
         warnings.append(f"Установка инструментов занята другим процессом: {error}")
 
-    # nuclei templates (бесшумная автозагрузка)
-    if "nuclei" in found:
-        try:
-            subprocess.run(
-                [str(found["nuclei"]), "-silent", "-ut", "-ud", str(bin_path / "nuclei-templates")],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=600,
-            )
-        except Exception:
-            warnings.append("nuclei templates: автодогрузка не удалась, запустите вручную nuclei -ut")
-
     missing = EXPECTED_TOOLS - set(found.keys())
     if missing:
         warnings.append("Не найдены: " + ", ".join(sorted(missing)))

@@ -98,9 +98,8 @@ reconx example.com -a 3   # for blood (naabu all + nmap vuln)
 # Идентификатор каталога для списка целей
 reconx -l targets.txt --list-id custom01
 
-# Запуск nuclei после enum/scan
-reconx example.com --nuclei fast
-reconx example.com --nuclei full
+# После завершения основного цикла CLI спросит, запускать ли nuclei
+# и покажет команду для найденных ресурсов (web/net)
 
 # Подробный лог (nmap, таймауты и т.д.)
 reconx example.com --debug

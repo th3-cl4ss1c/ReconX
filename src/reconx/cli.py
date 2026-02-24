@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 import shutil
 import os
+import subprocess
 
 # Загружаем конфигурацию провайдеров из provider-config.yaml ПЕРЕД импортом модулей
 # Используем только стандартное место ~/.config/reconx/provider-config.yaml
@@ -100,13 +101,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Уровень агрессии для IP-сканирования: 1=smap, 2=naabu top + nmap -A -T3, 3=naabu all + nmap -A -T5",
     )
     parser.add_argument(
-        "-n",
-        "--nuclei",
-        dest="nuclei_profile",
-        choices=["fast", "full"],
-        help="Запуск nuclei (web+net). web: alive-urls.txt; net: open-ports.txt. fast (web): severity=medium,high,critical; tags=cves,misconfig,exposure; c=30; timeout=10. full (web): +technology; c=80; timeout=20. net fast: tags=network,default-login; net full: +cves,exposure; c=50/80.",
-    )
-    parser.add_argument(
         "--debug",
         action="store_true",
         help="Подробный лог запуска (nmap команды, попытки, таймауты).",
@@ -169,8 +163,190 @@ def _restore_terminal() -> None:
         pass
 
 
+def _read_nonempty_lines(path: Path, skip_comments: bool = False) -> list[str]:
+    if not path.exists():
+        return []
+    result: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if skip_comments and line.startswith("#"):
+            continue
+        result.append(line)
+    return result
+
+
+def _nuclei_profiles(mode: str) -> dict[str, dict[str, str]]:
+    if mode == "web":
+        return {
+            "fast": {
+                "severity": "medium,high,critical",
+                "tags": "misconfig,exposure",
+                "timeout": "10",
+                "concurrency": "30",
+            },
+            "full": {
+                "severity": "medium,high,critical",
+                "tags": "cves,misconfig,exposure,default-login,technology",
+                "timeout": "20",
+                "concurrency": "80",
+            },
+        }
+    return {
+        "fast": {
+            "severity": "medium,high,critical",
+            "tags": "network",
+            "timeout": "15",
+            "concurrency": "50",
+        },
+        "full": {
+            "severity": "medium,high,critical",
+            "tags": "network,cves,exposure,default-login,technology,misconfig",
+            "timeout": "20",
+            "concurrency": "80",
+        },
+    }
+
+
+def _build_nuclei_cmd(nuclei_bin: str, input_file: Path, mode: str, profile: str) -> list[str]:
+    cfg = _nuclei_profiles(mode).get(profile, _nuclei_profiles(mode)["fast"])
+    return [
+        nuclei_bin,
+        "-silent",
+        "-j",
+        "-severity",
+        cfg["severity"],
+        "-tags",
+        cfg["tags"],
+        "-timeout",
+        cfg["timeout"],
+        "-c",
+        cfg["concurrency"],
+        "-l",
+        str(input_file),
+    ]
+
+
+def _run_nuclei_command(cmd: list[str], out_path: Path, mode: str) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=900,
+        )
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        out_path.write_text(combined, encoding="utf-8")
+        findings = 0
+        severities: dict[str, int] = {}
+        for line in (proc.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                import json
+
+                data = json.loads(line)
+                findings += 1
+                sev = str(data.get("info", {}).get("severity") or "").lower()
+                if sev:
+                    severities[sev] = severities.get(sev, 0) + 1
+            except Exception:
+                continue
+        prefix = f"nuclei-{mode}"
+        if proc.returncode != 0:
+            first_line = combined.splitlines()[0] if combined else ""
+            print(f"⚠️  {prefix} ошибка (код {proc.returncode}) {first_line}")
+        print(f"{prefix}: {findings} ({', '.join(f'{k}={v}' for k, v in sorted(severities.items()))})")
+    except subprocess.TimeoutExpired:
+        out_path.write_text("", encoding="utf-8")
+        print(f"⚠️  nuclei-{mode} timeout")
+
+
+def _ask_yes_no(prompt: str, default_no: bool = True) -> bool:
+    default_hint = "y/N" if default_no else "Y/n"
+    answer = input(f"{prompt} [{default_hint}]: ").strip().lower()
+    if not answer:
+        return not default_no
+    return answer in {"y", "yes", "д", "да"}
+
+
+def _prompt_nuclei_after_run(completed_runs: list[tuple[Target, Path]]) -> None:
+    if not completed_runs:
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+
+    preferred = Path.home() / ".cache" / "reconx" / "bin" / "nuclei"
+    nuclei_bin = str(preferred) if preferred.exists() else shutil.which("nuclei")
+    if not nuclei_bin:
+        print("ℹ️  nuclei не найден — пост-скан пропущен.")
+        return
+
+    tasks: list[dict[str, object]] = []
+    for target, run_dir in completed_runs:
+        processed_dir = run_dir / "processed"
+        raw_web_dir = run_dir / "raw" / "web"
+        raw_scan_dir = run_dir / "raw" / "scan"
+
+        web_unic = processed_dir / "alive-urls-unic.txt"
+        web_plain = processed_dir / "alive-urls.txt"
+        web_input = web_unic if _read_nonempty_lines(web_unic) else web_plain
+        web_lines = _read_nonempty_lines(web_input, skip_comments=True)
+        if web_lines:
+            tasks.append(
+                {
+                    "target": target.raw,
+                    "mode": "web",
+                    "input_path": web_input,
+                    "count": len(web_lines),
+                    "out_path": raw_web_dir / "nuclei-web.json",
+                }
+            )
+
+        net_input = processed_dir / "open-ports.txt"
+        net_lines = _read_nonempty_lines(net_input, skip_comments=True)
+        if net_lines:
+            tasks.append(
+                {
+                    "target": target.raw,
+                    "mode": "net",
+                    "input_path": net_input,
+                    "count": len(net_lines),
+                    "out_path": raw_scan_dir / "nuclei-net.json",
+                }
+            )
+
+    if not tasks:
+        print("ℹ️  Ресурсов для запуска nuclei не найдено.")
+        return
+
+    profile = "fast"
+    selected = input("\n🧪 Nuclei профиль (fast/full, Enter=fast): ").strip().lower()
+    if selected in {"fast", "full"}:
+        profile = selected
+
+    for task in tasks:
+        target = str(task["target"])
+        mode = str(task["mode"])
+        input_path = Path(task["input_path"])
+        out_path = Path(task["out_path"])
+        count = int(task["count"])
+        cmd = _build_nuclei_cmd(nuclei_bin, input_path, mode=mode, profile=profile)
+        cmd_preview = " ".join(cmd)
+        print(f"\n🔍 {target} [{mode}] ресурсов: {count}")
+        print(f"   cmd: {cmd_preview}")
+        print(f"   out: {out_path}")
+        if _ask_yes_no("Запустить nuclei?", default_no=True):
+            _run_nuclei_command(cmd, out_path, mode=mode)
+
+
 def _run_init(args: argparse.Namespace) -> int:
     root_dir: Path | None = None
+    completed_runs: list[tuple[Target, Path]] = []
 
     try:
         _ensure_data_dir_env()
@@ -223,12 +399,11 @@ def _run_init(args: argparse.Namespace) -> int:
                 EnumModule(
                     target_dir,
                     aggression=args.aggression,
-                    nuclei_profile=args.nuclei_profile,
+                    nuclei_profile=None,
                     single_mode=True,
                     debug=args.debug,
                 ).run([target])
-
-                dnsx_path = target_dir / "raw" / "scan" / "dnsx.json"
+                completed_runs.append((target, target_dir))
             elif target.kind == "ip":
                 try:
                     target_dir = module.create_target_layout(target)
@@ -240,10 +415,13 @@ def _run_init(args: argparse.Namespace) -> int:
                 ProbeModule(
                     target_dir,
                     aggression=args.aggression,
-                    nuclei_profile=args.nuclei_profile,
+                    nuclei_profile=None,
                     single_mode=True,
                     debug=args.debug,
                 ).run([target])
+                completed_runs.append((target, target_dir))
+
+        _prompt_nuclei_after_run(completed_runs)
 
         print("\n✅ Готово")
         return 0
@@ -279,10 +457,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[debug] targets: {args.targets}")
         print(f"[debug] list_path: {args.list_path}")
         print(f"[debug] aggression: {args.aggression}")
-        print(f"[debug] nuclei_profile: {args.nuclei_profile}")
     return _run_init(args)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
