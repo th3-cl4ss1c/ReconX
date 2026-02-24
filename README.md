@@ -41,6 +41,7 @@ pipx install .
 ## Проверка установки в Docker (чистый Debian + pipx)
 
 Требуется установленный Docker.
+Это опциональный smoke-тест для CI/проверки окружения. Основной способ работы — установка напрямую через `pipx`.
 
 ```bash
 bash scripts/test_install_debian_pipx.sh

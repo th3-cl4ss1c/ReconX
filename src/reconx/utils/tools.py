@@ -9,10 +9,18 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable, Tuple, List
+from typing import Dict, Iterable, Iterator, List, Tuple
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - fcntl всегда есть на Linux, это fallback.
+    fcntl = None
 
 SUPPORTED_PLATFORMS = {
     ("linux", "x86_64"): ("linux", "amd64"),
@@ -35,6 +43,20 @@ PREBUILT_TOOLS = [
     ("vulnx", "projectdiscovery/cvemap"),  # vulnx из cvemap repo
 ]
 
+EXPECTED_TOOLS = {
+    "subfinder",
+    "shuffledns",
+    "massdns",
+    "smap",
+    "naabu",
+    "httpx",
+    "dnsx",
+    "nuclei",
+    "vulnx",
+    "katana",
+    "gau",
+}
+
 
 def _platform_tag() -> tuple[str, str] | None:
     """Возвращает (os, arch) для выбора ассета: linux/amd64, linux/arm64 и т.д."""
@@ -42,11 +64,121 @@ def _platform_tag() -> tuple[str, str] | None:
     return SUPPORTED_PLATFORMS.get(key)
 
 
-def _download(url: str, dest: Path, timeout: int = 120) -> None:
+@contextmanager
+def _install_lock(lock_path: Path, wait_timeout_sec: int = 600) -> Iterator[None]:
+    """
+    Межпроцессный lock на установку тулов.
+    Нужен, чтобы параллельные запуски reconx не портили кэш бинарей.
+    """
+    if fcntl is None:
+        yield
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "a+", encoding="utf-8")
+    start = time.monotonic()
+    try:
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                elapsed = time.monotonic() - start
+                if elapsed >= wait_timeout_sec:
+                    raise TimeoutError(f"timeout ожидания lock: {lock_path}")
+                time.sleep(0.2)
+        yield
+    finally:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        fh.close()
+
+
+def _make_executable(path: Path) -> None:
+    mode = path.stat().st_mode
+    path.chmod(mode | stat.S_IEXEC)
+
+
+def _atomic_install_binary(src: Path, target: Path) -> None:
+    """
+    Атомарная установка бинаря:
+    копируем в tmp-файл в той же директории и только затем переименовываем.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_target = target.with_name(f".{target.name}.tmp.{os.getpid()}")
+    try:
+        shutil.copy2(src, tmp_target)
+        _make_executable(tmp_target)
+        os.replace(tmp_target, target)
+    finally:
+        tmp_target.unlink(missing_ok=True)
+
+
+def _download(url: str, dest: Path, timeout: int = 120, retries: int = 4, backoff_sec: float = 2.0) -> None:
+    """
+    Скачивание с retry + атомарной записью файла.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "ReconX/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as fh:
-        fh.write(resp.read())
+    last_error: Exception | None = None
+    retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
+
+    for attempt in range(1, retries + 1):
+        tmp_dest = dest.with_name(f".{dest.name}.tmp.{os.getpid()}.{attempt}")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ReconX/1.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp_dest, "wb") as fh:
+                fh.write(resp.read())
+            os.replace(tmp_dest, dest)
+            return
+        except urllib.error.HTTPError as error:
+            last_error = error
+            tmp_dest.unlink(missing_ok=True)
+            if error.code in retryable_statuses and attempt < retries:
+                time.sleep(backoff_sec * attempt)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last_error = error
+            tmp_dest.unlink(missing_ok=True)
+            if attempt < retries:
+                time.sleep(backoff_sec * attempt)
+                continue
+            break
+
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"download failed: {url}")
+
+
+def _fetch_json(url: str, timeout: int = 15, retries: int = 4, backoff_sec: float = 1.5) -> dict:
+    last_error: Exception | None = None
+    retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "ReconX/1.0",
+    }
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as error:
+            last_error = error
+            if error.code in retryable_statuses and attempt < retries:
+                time.sleep(backoff_sec * attempt)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, ValueError) as error:
+            last_error = error
+            if attempt < retries:
+                time.sleep(backoff_sec * attempt)
+                continue
+            break
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"fetch json failed: {url}")
 
 
 def _extract_zip(zip_path: Path, dest_dir: Path) -> None:
@@ -59,9 +191,40 @@ def _extract_tar(path: Path, dest_dir: Path) -> None:
         tf.extractall(dest_dir)
 
 
-def _make_executable(path: Path) -> None:
-    mode = path.stat().st_mode
-    path.chmod(mode | stat.S_IEXEC)
+def _smoke_check_binary(name: str, path: Path, timeout: int = 5) -> bool:
+    """
+    Базовая проверка целостности/исполняемости бинаря.
+    Если команда зависла на --help, считаем это pass (бинарь исполняется).
+    """
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return False
+    except OSError:
+        return False
+
+    if not os.access(path, os.X_OK):
+        try:
+            _make_executable(path)
+        except Exception:
+            return False
+
+    args = [str(path), "-h"]
+    try:
+        proc = subprocess.run(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+        )
+        # 127 обычно означает невозможность запуска (битый/несовместимый бинарь).
+        return proc.returncode != 127
+    except subprocess.TimeoutExpired:
+        return True
+    except OSError:
+        return False
+    except Exception:
+        return False
 
 
 def _download_prebuilt(name: str, repo: str, bin_path: Path, platform_os: str, arch: str) -> Path | None:
@@ -71,34 +234,32 @@ def _download_prebuilt(name: str, repo: str, bin_path: Path, platform_os: str, a
     """
     target = bin_path / name
     if target.exists():
-        return target
-    # Преобразуем macOS -> darwin для некоторых репо (gau)
+        if _smoke_check_binary(name, target):
+            return target
+        target.unlink(missing_ok=True)
+
     asset_os = "darwin" if platform_os == "darwin" else platform_os
     asset_arch = "386" if arch == "386" else arch
     match_suffix = f"{asset_os}_{asset_arch}"
-    # Доп. варианты: macOS_amd64, linux_amd64
     alt_suffix = f"{'macOS' if platform_os == 'darwin' else platform_os}_{asset_arch}"
 
     try:
         api_url = f"https://api.github.com/repos/{repo}/releases/latest"
-        req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github.v3+json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
+        data = _fetch_json(api_url)
     except Exception:
         return None
 
     assets = data.get("assets", [])
-    tag = data.get("tag_name", "latest")
     download_url = None
     archive_ext = None
 
-    for a in assets:
-        aname = a.get("name", "")
+    for asset in assets:
+        aname = asset.get("name", "")
         aname_lower = aname.lower()
         if "checksum" in aname_lower or ".sig" in aname_lower:
             continue
         if match_suffix in aname_lower or alt_suffix.lower() in aname_lower:
-            download_url = a.get("browser_download_url")
+            download_url = asset.get("browser_download_url")
             if download_url:
                 if aname_lower.endswith(".zip"):
                     archive_ext = ".zip"
@@ -110,7 +271,7 @@ def _download_prebuilt(name: str, repo: str, bin_path: Path, platform_os: str, a
                     archive_ext = ".zip"
                 break
 
-    if not download_url:
+    if not download_url or not archive_ext:
         return None
 
     try:
@@ -124,22 +285,21 @@ def _download_prebuilt(name: str, repo: str, bin_path: Path, platform_os: str, a
             else:
                 _extract_tar(arc_path, tmp)
 
-            # Ищем бинарь в распакованном содержимом
             binary = None
-            for p in tmp.rglob("*"):
-                if p.is_file() and p.name == name:
-                    binary = p
+            for path_candidate in tmp.rglob("*"):
+                if path_candidate.is_file() and path_candidate.name == name:
+                    binary = path_candidate
                     break
             if not binary:
-                # Может быть без расширения, ищем исполняемый файл с нужным именем
-                for p in tmp.rglob(name):
-                    if p.is_file():
-                        binary = p
+                for path_candidate in tmp.rglob(name):
+                    if path_candidate.is_file():
+                        binary = path_candidate
                         break
             if binary:
-                shutil.copy2(binary, target)
-                _make_executable(target)
-                return target
+                _atomic_install_binary(binary, target)
+                if _smoke_check_binary(name, target):
+                    return target
+                target.unlink(missing_ok=True)
     except Exception:
         pass
     return None
@@ -161,13 +321,14 @@ def _build_massdns(bin_path: Path) -> Path:
         src_root = next((p for p in tmpdir_path.iterdir() if p.is_dir() and p.name.startswith("massdns")), None)
         if not src_root:
             raise RuntimeError("Не найден каталог massdns после распаковки")
-        subprocess.run(["make"], cwd=src_root, check=True, env=env)
+        subprocess.run(["make"], cwd=src_root, check=True, env=env, timeout=600)
         built = src_root / "bin" / "massdns"
         if not built.exists():
             raise RuntimeError("Сборка massdns не создала bin/massdns")
         dest = bin_path / "massdns"
-        shutil.copy2(built, dest)
-        _make_executable(dest)
+        _atomic_install_binary(built, dest)
+        if not _smoke_check_binary("massdns", dest):
+            raise RuntimeError("Сборка massdns дала нерабочий бинарь")
         return dest
 
 
@@ -205,48 +366,52 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
         ("smap", "github.com/s0md3v/smap/cmd/smap@latest", {}),
         ("gau", "github.com/lc/gau/v2/cmd/gau@latest", {}),
     ]
-    go_tools_map = {name: (module, env) for name, module, env in go_tools}
+    go_tools_map = {name: (module, env_extra) for name, module, env_extra in go_tools}
 
     def _go_install(name: str, module: str, env_extra: dict[str, str] | None = None) -> Path | None:
         if not go_bin:
             return None
         target = bin_path / name
         if target.exists():
-            return target
+            if _smoke_check_binary(name, target):
+                return target
+            target.unlink(missing_ok=True)
+
         env = os.environ.copy()
         env["GOBIN"] = str(bin_path)
-        # Используем прямой прокси для Go модулей, если есть проблемы с сетью
         if "GOPROXY" not in env:
-            env["GOPROXY"] = "direct"
+            env["GOPROXY"] = "https://proxy.golang.org,direct"
         if env_extra:
             env.update(env_extra)
+
         try:
             result = subprocess.run(
                 [go_bin, "install", "-v", module],
                 check=True,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,  # Объединяем stderr в stdout для полного вывода
+                stderr=subprocess.STDOUT,
                 text=True,
                 env=env,
+                timeout=900,
             )
             if result.stdout:
-                # Логируем только важные сообщения, не весь вывод
                 output_lines = result.stdout.strip().splitlines()
                 important_lines = [line for line in output_lines if "error" in line.lower() or "warning" in line.lower()]
                 if important_lines:
                     notes.append("\n".join(important_lines))
+        except subprocess.TimeoutExpired:
+            warnings.append(f"{name}: go install timeout. Попробуйте вручную: go install {module}")
+            return None
         except subprocess.CalledProcessError as error:
-            # Получаем полный вывод (stdout + stderr)
-            error_output = error.stdout if hasattr(error, 'stdout') and error.stdout else (error.stderr if hasattr(error, 'stderr') else "")
+            error_output = error.stdout if hasattr(error, "stdout") and error.stdout else ""
             error_msg = error_output.decode("utf-8") if isinstance(error_output, bytes) else error_output
             stderr_txt = error_msg.lower() if error_msg else ""
-            
+
             if "pcap.h" in stderr_txt:
                 warnings.append(f"{name}: отсутствует libpcap-dev (sudo apt install -y libpcap-dev)")
             elif "timeout" in stderr_txt or "dial tcp" in stderr_txt:
-                warnings.append(f"{name}: проблема с сетью при установке (таймаут/сеть). Попробуйте установить вручную: go install {module}")
+                warnings.append(f"{name}: проблема с сетью при установке. Попробуйте вручную: go install {module}")
             else:
-                # Берем последние строки вывода для диагностики
                 if error_msg:
                     error_lines = error_msg.strip().splitlines()
                     error_preview = "\n".join(error_lines[-3:]) if len(error_lines) > 3 else error_msg[:300]
@@ -254,47 +419,52 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
                     error_preview = "нет вывода"
                 warnings.append(f"{name}: go install не удался (код {error.returncode})\n{error_preview}")
             return None
-        if target.exists():
-            _make_executable(target)
+
+        if target.exists() and _smoke_check_binary(name, target):
             return target
-        fresh = shutil.which(name)
-        return Path(fresh) if fresh else None
+        target.unlink(missing_ok=True)
+        return None
 
     found: Dict[str, Path] = {}
 
-    # massdns (build) — кэшируем в bin_path
-    massdns_cached = bin_path / "massdns"
-    if massdns_cached.exists():
-        found["massdns"] = massdns_cached
-    else:
-        existing_massdns = shutil.which("massdns")
-        if existing_massdns:
-            found["massdns"] = Path(existing_massdns)
-        else:
-            try:
-                built = _build_massdns(bin_path)
-                found["massdns"] = built
-            except Exception as error:  # noqa: BLE001
-                warnings.append(f"Не удалось собрать massdns: {error}")
+    lock_path = bin_path.parent / ".install.lock"
+    try:
+        with _install_lock(lock_path):
+            massdns_cached = bin_path / "massdns"
+            if massdns_cached.exists() and _smoke_check_binary("massdns", massdns_cached):
+                found["massdns"] = massdns_cached
+            else:
+                massdns_cached.unlink(missing_ok=True)
+                existing_massdns = shutil.which("massdns")
+                if existing_massdns and _smoke_check_binary("massdns", Path(existing_massdns)):
+                    found["massdns"] = Path(existing_massdns)
+                else:
+                    try:
+                        built = _build_massdns(bin_path)
+                        found["massdns"] = built
+                    except Exception as error:  # noqa: BLE001
+                        warnings.append(f"Не удалось собрать massdns: {error}")
 
-    # 1) Готовые бинари с GitHub Releases (работает без Go)
-    for name, repo in PREBUILT_TOOLS:
-        if name in found:
-            continue
-        path = _download_prebuilt(name, repo, bin_path, platform_os, arch)
-        if path:
-            found[name] = path
+            # 1) Готовые бинари с GitHub Releases (работает без Go)
+            for name, repo in PREBUILT_TOOLS:
+                if name in found:
+                    continue
+                path = _download_prebuilt(name, repo, bin_path, platform_os, arch)
+                if path and _smoke_check_binary(name, path):
+                    found[name] = path
 
-    # 2) Go install для тех, кого не нашли в prebuilt
-    for name in [n for n, _ in PREBUILT_TOOLS]:
-        if name in found or not go_bin:
-            continue
-        entry = go_tools_map.get(name)
-        if entry:
-            module, env_extra = entry
-            path = _go_install(name, module, env_extra)
-            if path:
-                found[name] = path
+            # 2) Go install для тех, кого не нашли в prebuilt
+            for name in [n for n, _ in PREBUILT_TOOLS]:
+                if name in found or not go_bin:
+                    continue
+                entry = go_tools_map.get(name)
+                if entry:
+                    module, env_extra = entry
+                    path = _go_install(name, module, env_extra)
+                    if path and _smoke_check_binary(name, path):
+                        found[name] = path
+    except TimeoutError as error:
+        warnings.append(f"Установка инструментов занята другим процессом: {error}")
 
     # nuclei templates (бесшумная автозагрузка)
     if "nuclei" in found:
@@ -304,12 +474,12 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                timeout=600,
             )
         except Exception:
             warnings.append("nuclei templates: автодогрузка не удалась, запустите вручную nuclei -ut")
 
-    expected = {"subfinder", "shuffledns", "massdns", "smap", "naabu", "httpx", "dnsx", "nuclei", "vulnx", "katana", "gau"}
-    missing = expected - set(found.keys())
+    missing = EXPECTED_TOOLS - set(found.keys())
     if missing:
         warnings.append("Не найдены: " + ", ".join(sorted(missing)))
 
@@ -318,4 +488,3 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
     os.environ["RECONX_CERTS"] = str(certs_path)
 
     return bin_path, found, warnings, notes
-
