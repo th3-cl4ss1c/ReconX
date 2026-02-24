@@ -38,6 +38,20 @@ pipx install .
 ./setup_dev.sh
 ```
 
+## Проверка установки в Docker (чистый Debian + pipx)
+
+Требуется установленный Docker.
+
+```bash
+bash scripts/test_install_debian_pipx.sh
+```
+
+По умолчанию тест ставит пакет из локального каталога (`SPEC=.`). Для проверки установки из GitHub:
+
+```bash
+SPEC='git+https://github.com/th3-cl4ss1c/ReconX.git' bash scripts/test_install_debian_pipx.sh
+```
+
 ## Обновление и удаление
 
 ```bash
