@@ -2,33 +2,67 @@
 
 Модульный CLI-инструмент для подготовки и запуска разведки с единообразной структурой артефактов. Создаёт стандартное дерево директорий для целей (доменов и IP), запускает subfinder, shuffledns, dnsx, smap, naabu, nmap, httpx, nuclei и связанные утилиты.
 
-## Установка
+## Установка (pipx)
 
-Через pipx (рекомендуется — изолированное окружение):
+1. Установите `pipx` (один раз на систему):
 
 ```bash
-# Из репозитория
+python3 -m pip install --user pipx
+python3 -m pipx ensurepath
+```
+
+После `ensurepath` откройте новый shell, чтобы `pipx`/`reconx` были в `PATH`.
+
+2. Установите ReconX:
+
+```bash
 pipx install git+https://github.com/th3-cl4ss1c/ReconX.git
-
-# Локально из клонированного репозитория
-pipx install .
-
-# Editable-режим для разработки
-pipx install --editable .
+reconx --version
 ```
 
-Обновление:
+Запуск без установки (полезно для быстрой проверки):
 
 ```bash
-pipx reinstall reconx
+pipx run --spec git+https://github.com/th3-cl4ss1c/ReconX.git reconx --help
 ```
 
-Если установлено с GitHub — pipx подтянет последний коммит. Чтобы принудительно переустановить поверх существующей установки: `pipx install --force git+https://github.com/th3-cl4ss1c/ReconX.git`
+Локальная установка из клонированного репозитория:
 
-Быстрый старт для разработки:
+```bash
+pipx install .
+```
+
+Для разработки (editable-режим):
 
 ```bash
 ./setup_dev.sh
+```
+
+## Обновление и удаление
+
+```bash
+# Переустановить текущий источник пакета
+pipx reinstall reconx
+
+# Принудительно обновить из GitHub (поверх существующей установки)
+pipx install --force git+https://github.com/th3-cl4ss1c/ReconX.git
+
+# Удалить
+pipx uninstall reconx
+```
+
+## Системные зависимости
+
+ReconX автоматически скачивает нужные утилиты в `~/.cache/reconx/bin` при первом запуске.
+
+- Автоуправляемые утилиты: `subfinder`, `shuffledns`, `massdns`, `dnsx`, `smap`, `naabu`, `httpx`, `nuclei`, `katana`, `gau`, `vulnx`.
+- Системно рекомендуется: `nmap` (для уровней агрессии `2` и `3`) и `build-essential` (для fallback-сборки `massdns`, если готовый бинарь недоступен).
+
+Пример для Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install -y nmap build-essential
 ```
 
 ## Использование
@@ -57,19 +91,16 @@ reconx example.com --nuclei full
 reconx example.com --debug
 ```
 
-## Внешние инструменты
-
-При первом запуске ReconX автоматически скачивает все нужные утилиты в `~/.cache/reconx/bin` (готовые бинари с GitHub Releases, без Go). Если загрузка не удалась — пробует `go install` как запасной вариант.
-
-- **DNS/enum**: subfinder, shuffledns, massdns, dnsx
-- **Сканирование**: smap, naabu, nmap
-- **Web/URL**: httpx, gau, paramspider
-- **Vuln**: nuclei
-- **Провайдеры**: hunter.io, snusbase (API-ключи в конфиге)
-
 ## Конфигурация
 
-API-ключи в `~/.config/reconx/provider-config.yaml`:
+Скопируйте пример и заполните API-ключи:
+
+```bash
+mkdir -p ~/.config/reconx
+cp provider-config.yaml.example ~/.config/reconx/provider-config.yaml
+```
+
+Файл `~/.config/reconx/provider-config.yaml`:
 
 ```yaml
 hunter_io: [your_hunter_api_key]
