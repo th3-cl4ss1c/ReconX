@@ -13,6 +13,7 @@ _PROVIDER_CONFIG_CACHE: dict | None = None
 _BW_SESSION_CACHE: str | None = None
 _BW_TIMEOUT_WARNED: bool = False
 _BW_ERROR_WARNED: bool = False
+_BW_AUTH_WARNED: bool = False
 
 
 def _load_provider_config() -> dict:
@@ -64,80 +65,18 @@ def _ensure_bw_env() -> None:
     os.environ["BITWARDENCLI_APPDATA_DIR"] = str(fallback)
 
 
-def _bw_status() -> str | None:
-    if not shutil.which("bw"):
-        return None
-    _ensure_bw_env()
-    try:
-        proc = subprocess.run(
-            ["bw", "status", "--raw"],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=15,
-        )
-        raise_on_interrupt_returncode(proc.returncode)
-        if proc.returncode != 0 or not proc.stdout.strip():
-            return None
-        obj = json.loads(proc.stdout)
-        status = obj.get("status")
-        if isinstance(status, str):
-            return status
-    except Exception:
-        return None
-    return None
-
-
-def _ensure_bw_session() -> str | None:
-    global _BW_SESSION_CACHE
-
-    existing = os.getenv("BW_SESSION")
-    if existing:
-        _BW_SESSION_CACHE = existing
-        return existing
-    if _BW_SESSION_CACHE:
-        return _BW_SESSION_CACHE
-    if not shutil.which("bw"):
-        return None
-    if not (os.isatty(0) and os.isatty(1)):
-        return None
-
-    _ensure_bw_env()
-    status = _bw_status()
-    if status == "unauthenticated":
-        print("ℹ️  Bitwarden: требуется login (bw login)")
-        login_proc = subprocess.run(["bw", "login"], check=False)
-        raise_on_interrupt_returncode(login_proc.returncode)
-        if login_proc.returncode != 0:
-            return None
-    if status in {"locked", "unauthenticated", None}:
-        print("ℹ️  Bitwarden: требуется unlock (bw unlock)")
-    try:
-        unlock_proc = subprocess.run(
-            ["bw", "unlock", "--raw"],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=120,
-        )
-        raise_on_interrupt_returncode(unlock_proc.returncode)
-        if unlock_proc.returncode == 0:
-            session = unlock_proc.stdout.strip()
-            if session:
-                _BW_SESSION_CACHE = session
-                os.environ["BW_SESSION"] = session
-                return session
-    except Exception:
-        return None
-    return None
-
-
 def _bw_warn_once(kind: str, message: str) -> None:
-    global _BW_TIMEOUT_WARNED, _BW_ERROR_WARNED
+    global _BW_TIMEOUT_WARNED, _BW_ERROR_WARNED, _BW_AUTH_WARNED
     if kind == "timeout":
         if _BW_TIMEOUT_WARNED:
             return
         _BW_TIMEOUT_WARNED = True
+        print(message)
+        return
+    if kind == "auth":
+        if _BW_AUTH_WARNED:
+            return
+        _BW_AUTH_WARNED = True
         print(message)
         return
     if kind == "error":
@@ -145,6 +84,19 @@ def _bw_warn_once(kind: str, message: str) -> None:
             return
         _BW_ERROR_WARNED = True
         print(message)
+
+
+def _looks_like_bw_auth_error(text: str) -> bool:
+    low = text.lower()
+    markers = (
+        "not logged in",
+        "vault is locked",
+        "is locked",
+        "you are not logged in",
+        "unlock your vault",
+        "unauthorized",
+    )
+    return any(marker in low for marker in markers)
 
 
 def _bw_run(
@@ -164,6 +116,11 @@ def _bw_run(
             timeout=timeout,
         )
         raise_on_interrupt_returncode(proc.returncode)
+        if proc.returncode != 0 and _looks_like_bw_auth_error((proc.stderr or "") + "\n" + (proc.stdout or "")):
+            _bw_warn_once(
+                "auth",
+                "ℹ️  Bitwarden заблокирован/не авторизован. Выполните: bw login && export BW_SESSION=\"$(bw unlock --raw)\"",
+            )
         return proc
     except subprocess.TimeoutExpired:
         _bw_warn_once(
@@ -257,24 +214,8 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
         except Exception:
             continue
 
-    # 2) Если не получилось и есть TTY — пробуем интерактивно unlock.
-    session = _ensure_bw_session()
-    if not session:
-        return None
-    item_id = _bw_find_item_id(item_name, session=session)
-    if not item_id:
-        return None
-    proc = _bw_run(["get", "item", item_id, "--raw"], session=session, timeout=45)
-    if proc is None:
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    try:
-        item_obj = json.loads(proc.stdout)
-        if isinstance(item_obj, dict):
-            return _bw_extract_field(item_obj, field=field)
-    except Exception:
-        return None
+    # 2) Интерактивный login/unlock в процессе скана не запускаем:
+    # это мешает корректному Ctrl+C и делает поток выполнения хрупким.
     return None
 
 

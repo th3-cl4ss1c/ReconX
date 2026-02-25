@@ -314,6 +314,7 @@ def _prompt_nuclei_after_run(completed_runs: list[tuple[Target, Path]]) -> None:
 
 def _run_init(args: argparse.Namespace) -> int:
     root_dir: Path | None = None
+    active_target_dir: Path | None = None
     completed_runs: list[tuple[Target, Path]] = []
 
     try:
@@ -362,6 +363,7 @@ def _run_init(args: argparse.Namespace) -> int:
                 except FileExistsError as error:
                     print(f"❌ {error}", file=sys.stderr)
                     continue
+                active_target_dir = target_dir
                 print(f"\n🌐 Домен: {target.raw} (enum)")
                 print(f"📂 Run: {target_dir}")
                 EnumModule(
@@ -372,12 +374,14 @@ def _run_init(args: argparse.Namespace) -> int:
                     debug=args.debug,
                 ).run([target])
                 completed_runs.append((target, target_dir))
+                active_target_dir = None
             elif target.kind == "ip":
                 try:
                     target_dir = module.create_target_layout(target)
                 except FileExistsError as error:
                     print(f"❌ {error}", file=sys.stderr)
                     continue
+                active_target_dir = target_dir
                 print(f"\n📡 IP: {target.raw} (scan)")
                 print(f"📂 Run: {target_dir}")
                 ProbeModule(
@@ -388,6 +392,7 @@ def _run_init(args: argparse.Namespace) -> int:
                     debug=args.debug,
                 ).run([target])
                 completed_runs.append((target, target_dir))
+                active_target_dir = None
 
         _prompt_nuclei_after_run(completed_runs)
 
@@ -395,6 +400,15 @@ def _run_init(args: argparse.Namespace) -> int:
         return 0
 
     except KeyboardInterrupt:
+        # Удаляем только текущий незавершённый run-dir (completed_runs сохраняем).
+        if active_target_dir and active_target_dir.exists():
+            try:
+                shutil.rmtree(active_target_dir, ignore_errors=True)
+                parent_dir = active_target_dir.parent
+                if parent_dir.exists() and not any(parent_dir.iterdir()):
+                    parent_dir.rmdir()
+            except Exception:
+                pass
         # ВАЖНО: Восстанавливаем терминал ПЕРЕД выводом сообщения
         # Это позволяет readline правильно работать после восстановления
         _restore_terminal()
