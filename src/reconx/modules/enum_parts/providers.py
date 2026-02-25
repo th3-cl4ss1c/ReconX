@@ -9,6 +9,8 @@ from pathlib import Path
 
 _PROVIDER_CONFIG_CACHE: dict | None = None
 _BW_SESSION_CACHE: str | None = None
+_BW_TIMEOUT_WARNED: bool = False
+_BW_ERROR_WARNED: bool = False
 
 
 def _load_provider_config() -> dict:
@@ -125,21 +127,52 @@ def _ensure_bw_session() -> str | None:
     return None
 
 
-def _bw_run(args: list[str], session: str | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
+def _bw_warn_once(kind: str, message: str) -> None:
+    global _BW_TIMEOUT_WARNED, _BW_ERROR_WARNED
+    if kind == "timeout":
+        if _BW_TIMEOUT_WARNED:
+            return
+        _BW_TIMEOUT_WARNED = True
+        print(message)
+        return
+    if kind == "error":
+        if _BW_ERROR_WARNED:
+            return
+        _BW_ERROR_WARNED = True
+        print(message)
+
+
+def _bw_run(
+    args: list[str],
+    session: str | None = None,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess | None:
     cmd = ["bw", *args]
     if session:
         cmd.extend(["--session", session])
-    return subprocess.run(
-        cmd,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
-    )
+    try:
+        return subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        _bw_warn_once(
+            "timeout",
+            "⚠️  Bitwarden CLI timeout, продолжаю без bw (проверьте bw status/unlock).",
+        )
+        return None
+    except Exception:
+        _bw_warn_once("error", "⚠️  Bitwarden CLI недоступен, продолжаю без bw.")
+        return None
 
 
 def _bw_find_item_id(item_name: str, session: str | None = None) -> str | None:
     proc = _bw_run(["list", "items", "--search", item_name, "--raw"], session=session, timeout=45)
+    if proc is None:
+        return None
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
     try:
@@ -204,6 +237,8 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
         if not item_id:
             continue
         proc = _bw_run(["get", "item", item_id, "--raw"], session=session, timeout=45)
+        if proc is None:
+            continue
         if proc.returncode != 0 or not proc.stdout.strip():
             continue
         try:
@@ -223,6 +258,8 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
     if not item_id:
         return None
     proc = _bw_run(["get", "item", item_id, "--raw"], session=session, timeout=45)
+    if proc is None:
+        return None
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
     try:
