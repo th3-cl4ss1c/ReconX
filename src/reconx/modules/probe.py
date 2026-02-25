@@ -11,6 +11,7 @@ import ipaddress
 
 from reconx.modules.base import Module
 from reconx.utils.targets import Target
+from reconx.utils.process import raise_on_interrupt_returncode
 
 
 class ProbeModule(Module):
@@ -129,7 +130,10 @@ class ProbeModule(Module):
         try:
             out = subprocess.check_output(cmd, shell=True, text=True, timeout=timeout, stderr=subprocess.DEVNULL)
             return [line.strip() for line in out.splitlines() if line.strip()]
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+        except subprocess.CalledProcessError as error:
+            raise_on_interrupt_returncode(error.returncode)
+            return []
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             return []
 
     def _parse_ports(self, lines: Iterable[str]) -> Set[int]:
@@ -300,6 +304,7 @@ class ProbeModule(Module):
             print("⚠️  nmap timeout (ip)")
             return 0
         except subprocess.CalledProcessError as error:
+            raise_on_interrupt_returncode(error.returncode)
             combined = (error.stdout or "") + (error.stderr or "")
         lines = [ln for ln in combined.splitlines() if ln.strip()]
         # Сохраняем текстовый вывод
@@ -376,6 +381,7 @@ class ProbeModule(Module):
                 check=False,
                 timeout=300,
             )
+            raise_on_interrupt_returncode(proc.returncode)
             combined = (proc.stdout or "") + (proc.stderr or "")
             if proc.returncode != 0:
                 out_path.write_text(combined, encoding="utf-8")
@@ -480,6 +486,7 @@ class ProbeModule(Module):
                 check=False,
                 timeout=600,
             )
+            raise_on_interrupt_returncode(proc.returncode)
             combined = (proc.stdout or "") + (proc.stderr or "")
             out_path.write_text(combined, encoding="utf-8")
             findings = 0
@@ -529,4 +536,3 @@ class ProbeModule(Module):
             except ValueError:
                 continue
         return ports
-

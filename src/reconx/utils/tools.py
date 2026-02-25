@@ -17,6 +17,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Tuple
 
+from reconx.utils.process import raise_on_interrupt_returncode
+
 try:
     import fcntl
 except Exception:  # pragma: no cover - fcntl всегда есть на Linux, это fallback.
@@ -217,6 +219,7 @@ def _smoke_check_binary(name: str, path: Path, timeout: int = 5) -> bool:
             timeout=timeout,
             check=False,
         )
+        raise_on_interrupt_returncode(proc.returncode)
         # 127 обычно означает невозможность запуска (битый/несовместимый бинарь).
         return proc.returncode != 127
     except subprocess.TimeoutExpired:
@@ -321,7 +324,11 @@ def _build_massdns(bin_path: Path) -> Path:
         src_root = next((p for p in tmpdir_path.iterdir() if p.is_dir() and p.name.startswith("massdns")), None)
         if not src_root:
             raise RuntimeError("Не найден каталог massdns после распаковки")
-        subprocess.run(["make"], cwd=src_root, check=True, env=env, timeout=600)
+        try:
+            subprocess.run(["make"], cwd=src_root, check=True, env=env, timeout=600)
+        except subprocess.CalledProcessError as error:
+            raise_on_interrupt_returncode(error.returncode)
+            raise
         built = src_root / "bin" / "massdns"
         if not built.exists():
             raise RuntimeError("Сборка massdns не создала bin/massdns")
@@ -403,6 +410,7 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
             warnings.append(f"{name}: go install timeout. Попробуйте вручную: go install {module}")
             return None
         except subprocess.CalledProcessError as error:
+            raise_on_interrupt_returncode(error.returncode)
             error_output = error.stdout if hasattr(error, "stdout") and error.stdout else ""
             error_msg = error_output.decode("utf-8") if isinstance(error_output, bytes) else error_output
             stderr_txt = error_msg.lower() if error_msg else ""
@@ -443,6 +451,8 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
                         built = _build_massdns(bin_path)
                         found["massdns"] = built
                     except Exception as error:  # noqa: BLE001
+                        if isinstance(error, subprocess.CalledProcessError):
+                            raise_on_interrupt_returncode(error.returncode)
                         warnings.append(f"Не удалось собрать massdns: {error}")
 
             # 1) Готовые бинари с GitHub Releases (работает без Go)

@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from reconx.utils.process import raise_on_interrupt_returncode
+
 
 def run_httpx(
     targets: list[str],
@@ -61,6 +63,7 @@ def run_httpx(
             check=False,
             timeout=300,
         )
+        raise_on_interrupt_returncode(proc.returncode)
         combined = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:
             out_path.write_text(combined, encoding="utf-8")
@@ -229,6 +232,7 @@ def run_nuclei(targets: list[str], out_path: Path, profile: str, mode: str = "we
             check=False,
             timeout=600,
         )
+        raise_on_interrupt_returncode(proc.returncode)
         combined = (proc.stdout or "") + (proc.stderr or "")
         out_path.write_text(combined, encoding="utf-8")
         findings = 0

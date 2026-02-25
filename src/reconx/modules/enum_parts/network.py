@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Iterable
 
+from reconx.utils.process import raise_on_interrupt_returncode
+
 
 def count_cves(lines: Iterable[str]) -> int:
     pattern = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
@@ -99,6 +101,7 @@ def run_dnsx(hosts: list[str], resolvers: str, out_path: Path) -> list[str]:
         print("⚠️  dnsx timeout")
         return []
     except subprocess.CalledProcessError as error:
+        raise_on_interrupt_returncode(error.returncode)
         out_path.write_text(error.stdout or "", encoding="utf-8")
         print(f"⚠️  dnsx ошибка (код {error.returncode})")
         return []
@@ -161,6 +164,7 @@ def run_smap_hosts(hosts: list[str], out_path: Path) -> tuple[list[str], set[int
         print("⚠️  smap timeout (hosts)")
         return [], set()
     except subprocess.CalledProcessError as error:
+        raise_on_interrupt_returncode(error.returncode)
         out_path.write_text(error.stdout or "", encoding="utf-8")
         print(f"⚠️  smap ошибка (код {error.returncode})")
         return [], set()
@@ -203,6 +207,7 @@ def run_naabu_hosts(hosts: list[str], out_path: Path, aggressive: bool = False) 
         print("⚠️  naabu timeout (hosts)")
         return [], set()
     except subprocess.CalledProcessError as error:
+        raise_on_interrupt_returncode(error.returncode)
         out_path.write_text(error.stdout or "", encoding="utf-8")
         print(f"⚠️  naabu ошибка (код {error.returncode})")
         return [], set()
@@ -340,6 +345,7 @@ def run_nmap_hosts(hosts: list[str], ports: set[int], out_path: Path, aggression
         except KeyboardInterrupt:
             raise
         except subprocess.CalledProcessError as error:
+            raise_on_interrupt_returncode(error.returncode)
             combined = _as_text(error.stdout) + _as_text(error.stderr)
             log_path.write_text(combined, encoding="utf-8")
         finally:

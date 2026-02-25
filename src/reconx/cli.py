@@ -10,6 +10,7 @@ import subprocess
 from reconx import __version__
 from reconx.modules.workspace import WorkspaceModule
 from reconx.modules import EnumModule, ProbeModule
+from reconx.utils.process import raise_on_interrupt_returncode
 from reconx.utils.targets import Target, load_targets
 
 
@@ -204,6 +205,7 @@ def _run_nuclei_command(cmd: list[str], out_path: Path, mode: str) -> None:
             check=False,
             timeout=900,
         )
+        raise_on_interrupt_returncode(proc.returncode)
         combined = (proc.stdout or "") + (proc.stderr or "")
         out_path.write_text(combined, encoding="utf-8")
         findings = 0

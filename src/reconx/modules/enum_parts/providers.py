@@ -7,6 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from reconx.utils.process import raise_on_interrupt_returncode
+
 _PROVIDER_CONFIG_CACHE: dict | None = None
 _BW_SESSION_CACHE: str | None = None
 _BW_TIMEOUT_WARNED: bool = False
@@ -74,6 +76,7 @@ def _bw_status() -> str | None:
             check=False,
             timeout=15,
         )
+        raise_on_interrupt_returncode(proc.returncode)
         if proc.returncode != 0 or not proc.stdout.strip():
             return None
         obj = json.loads(proc.stdout)
@@ -104,6 +107,7 @@ def _ensure_bw_session() -> str | None:
     if status == "unauthenticated":
         print("ℹ️  Bitwarden: требуется login (bw login)")
         login_proc = subprocess.run(["bw", "login"], check=False)
+        raise_on_interrupt_returncode(login_proc.returncode)
         if login_proc.returncode != 0:
             return None
     if status in {"locked", "unauthenticated", None}:
@@ -116,6 +120,7 @@ def _ensure_bw_session() -> str | None:
             check=False,
             timeout=120,
         )
+        raise_on_interrupt_returncode(unlock_proc.returncode)
         if unlock_proc.returncode == 0:
             session = unlock_proc.stdout.strip()
             if session:
@@ -151,13 +156,15 @@ def _bw_run(
     if session:
         cmd.extend(["--session", session])
     try:
-        return subprocess.run(
+        proc = subprocess.run(
             cmd,
             text=True,
             capture_output=True,
             check=False,
             timeout=timeout,
         )
+        raise_on_interrupt_returncode(proc.returncode)
+        return proc
     except subprocess.TimeoutExpired:
         _bw_warn_once(
             "timeout",

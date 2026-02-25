@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+from reconx.utils.process import raise_on_interrupt_returncode
+
 
 def run_gau(
     domain: str,
@@ -60,6 +62,7 @@ def run_gau(
             check=False,
             timeout=300,
         )
+        raise_on_interrupt_returncode(proc.returncode)
         urls = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
         out_path.write_text("\n".join(urls) + ("\n" if urls else ""), encoding="utf-8")
         print(f"gau: {len(urls)}")
@@ -128,6 +131,7 @@ def run_gau(
                 p.write_text("", encoding="utf-8")
         print("⚠️  gau timeout")
     except subprocess.CalledProcessError as error:
+        raise_on_interrupt_returncode(error.returncode)
         out_path.write_text(error.stdout or "", encoding="utf-8")
         for p in (gau_clean_path, gau_core_path, gau_subs_path):
             if p is not None:

@@ -5,12 +5,17 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from reconx.utils.process import raise_on_interrupt_returncode
+
 
 def run_cmd(cmd: str, timeout: int) -> list[str]:
     try:
         out = subprocess.check_output(cmd, shell=True, text=True, timeout=timeout, stderr=subprocess.DEVNULL)
         return [line.strip() for line in out.splitlines() if line.strip()]
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError as error:
+        raise_on_interrupt_returncode(error.returncode)
+        return []
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
 
 
