@@ -137,7 +137,14 @@ export RECONX_BW_SNUSBASE_ITEM="my/snus-item"
 export RECONX_BW_SNUSBASE_FIELD="password"    # или custom:FIELD
 ```
 
-Если `bw` в статусе `locked`, ReconX в интерактивном TTY попросит unlock.
+Если `BW_SESSION` не задан, ReconX в интерактивном TTY предложит скрыто ввести готовый ключ `BW_SESSION` (Enter — пропустить).
+
+Подготовить ключ заранее:
+
+```bash
+bw login
+export BW_SESSION="$(bw unlock --raw)"
+```
 
 ### Вариант 3: `provider-config.yaml` (опционально)
 

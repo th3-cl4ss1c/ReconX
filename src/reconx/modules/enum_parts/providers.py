@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import shutil
@@ -14,6 +15,7 @@ _BW_SESSION_CACHE: str | None = None
 _BW_TIMEOUT_WARNED: bool = False
 _BW_ERROR_WARNED: bool = False
 _BW_AUTH_WARNED: bool = False
+_BW_SESSION_PROMPTED: bool = False
 
 
 def _load_provider_config() -> dict:
@@ -119,7 +121,7 @@ def _bw_run(
         if proc.returncode != 0 and _looks_like_bw_auth_error((proc.stderr or "") + "\n" + (proc.stdout or "")):
             _bw_warn_once(
                 "auth",
-                "ℹ️  Bitwarden заблокирован/не авторизован. Выполните: bw login && export BW_SESSION=\"$(bw unlock --raw)\"",
+                "ℹ️  Bitwarden заблокирован/не авторизован. Выполните: bw login && export BW_SESSION=\"$(bw unlock --raw)\" или введите готовый BW_SESSION по запросу reconx.",
             )
         return proc
     except subprocess.TimeoutExpired:
@@ -131,6 +133,45 @@ def _bw_run(
     except Exception:
         _bw_warn_once("error", "⚠️  Bitwarden CLI недоступен, продолжаю без bw.")
         return None
+
+
+def _ensure_bw_session_from_input() -> str | None:
+    """
+    Опционально запрашивает готовый ключ BW_SESSION (скрытый ввод).
+    Сессия хранится только в текущем процессе reconx и не трогает другие процессы.
+    """
+    global _BW_SESSION_CACHE, _BW_SESSION_PROMPTED
+
+    env_session = _value_to_string(os.getenv("BW_SESSION"))
+    if env_session:
+        _BW_SESSION_CACHE = env_session
+        return env_session
+    if _BW_SESSION_CACHE:
+        return _BW_SESSION_CACHE
+    if _BW_SESSION_PROMPTED:
+        return None
+
+    _BW_SESSION_PROMPTED = True
+    if not (shutil.which("bw") and os.isatty(0) and os.isatty(1)):
+        return None
+
+    try:
+        session = getpass.getpass("🔑 Введите BW_SESSION (Enter=пропустить): ").strip()
+    except KeyboardInterrupt:
+        raise
+    except Exception:
+        return None
+    if not session:
+        return None
+
+    # Лёгкая валидация: пробуем запрос списка с переданной сессией.
+    probe = _bw_run(["list", "items", "--search", "reconx", "--raw"], session=session, timeout=30)
+    if probe is None or probe.returncode != 0:
+        print("⚠️  Введённый BW_SESSION не подошёл.")
+        return None
+
+    _BW_SESSION_CACHE = session
+    return session
 
 
 def _bw_find_item_id(item_name: str, session: str | None = None) -> str | None:
@@ -195,8 +236,18 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
         return None
 
     _ensure_bw_env()
-    # 1) Пытаемся использовать существующую сессию (или unlocked state) без интерактива.
-    for session in (os.getenv("BW_SESSION"), _BW_SESSION_CACHE, None):
+    # 1) Пытаемся использовать существующую сессию без интерактива.
+    sessions: list[str | None] = []
+    env_session = _value_to_string(os.getenv("BW_SESSION"))
+    if env_session:
+        sessions.append(env_session)
+    if _BW_SESSION_CACHE and _BW_SESSION_CACHE not in sessions:
+        sessions.append(_BW_SESSION_CACHE)
+    # В неинтерактивном режиме пробуем ещё и None (вдруг bw уже unlocked системно).
+    if not sessions and not (os.isatty(0) and os.isatty(1)):
+        sessions.append(None)
+
+    for session in sessions:
         item_id = _bw_find_item_id(item_name, session=session)
         if not item_id:
             continue
@@ -214,8 +265,22 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
         except Exception:
             continue
 
-    # 2) Интерактивный login/unlock в процессе скана не запускаем:
-    # это мешает корректному Ctrl+C и делает поток выполнения хрупким.
+    # 2) Фолбэк: опциональный скрытый ввод готового BW_SESSION.
+    session = _ensure_bw_session_from_input()
+    if not session:
+        return None
+    item_id = _bw_find_item_id(item_name, session=session)
+    if not item_id:
+        return None
+    proc = _bw_run(["get", "item", item_id, "--raw"], session=session, timeout=45)
+    if proc is None or proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        item_obj = json.loads(proc.stdout)
+        if isinstance(item_obj, dict):
+            return _bw_extract_field(item_obj, field=field)
+    except Exception:
+        return None
     return None
 
 
