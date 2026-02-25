@@ -142,7 +142,7 @@ def _ensure_bw_session_from_input() -> str | None:
     """
     global _BW_SESSION_CACHE, _BW_SESSION_PROMPTED
 
-    env_session = _value_to_string(os.getenv("BW_SESSION"))
+    env_session = _value_to_string(os.getenv("RECONX_BW_SESSION")) or _value_to_string(os.getenv("BW_SESSION"))
     if env_session:
         _BW_SESSION_CACHE = env_session
         return env_session
@@ -155,12 +155,21 @@ def _ensure_bw_session_from_input() -> str | None:
     if not (shutil.which("bw") and os.isatty(0) and os.isatty(1)):
         return None
 
+    session = ""
     try:
-        session = getpass.getpass("🔑 Введите BW_SESSION (Enter=пропустить): ").strip()
+        session = getpass.getpass("🔑 Введите BW_SESSION (скрытый ввод, Enter=пропустить): ").strip()
     except KeyboardInterrupt:
         raise
     except Exception:
-        return None
+        session = ""
+    if not session:
+        # В некоторых терминалах вставка в скрытый prompt getpass может не срабатывать.
+        try:
+            session = input("🔑 Вставьте BW_SESSION (видимый ввод, Enter=пропустить): ").strip()
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            return None
     if not session:
         return None
 

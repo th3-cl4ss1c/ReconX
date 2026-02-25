@@ -138,12 +138,19 @@ export RECONX_BW_SNUSBASE_FIELD="password"    # или custom:FIELD
 ```
 
 Если `BW_SESSION` не задан, ReconX в интерактивном TTY предложит скрыто ввести готовый ключ `BW_SESSION` (Enter — пропустить).
+Если вставка в скрытый prompt не сработала, ReconX автоматически предложит второй (видимый) prompt.
 
 Подготовить ключ заранее:
 
 ```bash
 bw login
 export BW_SESSION="$(bw unlock --raw)"
+```
+
+Альтернатива для запуска только текущей команды (без глобального `export`):
+
+```bash
+RECONX_BW_SESSION="$(bw unlock --raw)" reconx example.com
 ```
 
 ### Вариант 3: `provider-config.yaml` (опционально)
