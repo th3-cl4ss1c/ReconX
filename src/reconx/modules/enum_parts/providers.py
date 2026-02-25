@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
+_PROVIDER_CONFIG_CACHE: dict | None = None
+_BW_SESSION_CACHE: str | None = None
 
-def _load_api_key(env_var: str, config_key: str) -> str | None:
-    api_key = os.getenv(env_var)
-    if api_key:
-        return str(api_key)
+
+def _load_provider_config() -> dict:
+    global _PROVIDER_CONFIG_CACHE
+    if _PROVIDER_CONFIG_CACHE is not None:
+        return _PROVIDER_CONFIG_CACHE
 
     try:
         import yaml
@@ -17,22 +22,259 @@ def _load_api_key(env_var: str, config_key: str) -> str | None:
         config_file = Path.home() / ".config" / "reconx" / "provider-config.yaml"
         if config_file.exists():
             with open(config_file, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-                value = config.get(config_key)
-                if value:
-                    api_key = value[0] if isinstance(value, list) else value
-                    os.environ[env_var] = str(api_key)
-                    return str(api_key)
+                _PROVIDER_CONFIG_CACHE = yaml.safe_load(f) or {}
+                if isinstance(_PROVIDER_CONFIG_CACHE, dict):
+                    return _PROVIDER_CONFIG_CACHE
+    except Exception:
+        pass
+    _PROVIDER_CONFIG_CACHE = {}
+    return _PROVIDER_CONFIG_CACHE
+
+
+def _value_to_string(value: object) -> str | None:
+    if not value:
+        return None
+    if isinstance(value, list):
+        if not value:
+            return None
+        value = value[0]
+    text = str(value).strip()
+    return text or None
+
+
+def _ensure_bw_env() -> None:
+    """
+    Готовим appdata-dir для bw cli (помогает в средах с ограниченной записью в $HOME).
+    """
+    if os.getenv("BITWARDENCLI_APPDATA_DIR"):
+        return
+    default = Path.home() / ".config" / "Bitwarden CLI"
+    try:
+        default.mkdir(parents=True, exist_ok=True)
+        if os.access(default, os.W_OK):
+            return
+    except Exception:
+        pass
+    fallback = Path("/tmp") / f"bitwarden-cli-{os.getuid()}"
+    fallback.mkdir(parents=True, exist_ok=True)
+    os.environ["BITWARDENCLI_APPDATA_DIR"] = str(fallback)
+
+
+def _bw_status() -> str | None:
+    if not shutil.which("bw"):
+        return None
+    _ensure_bw_env()
+    try:
+        proc = subprocess.run(
+            ["bw", "status", "--raw"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return None
+        obj = json.loads(proc.stdout)
+        status = obj.get("status")
+        if isinstance(status, str):
+            return status
     except Exception:
         return None
     return None
 
 
+def _ensure_bw_session() -> str | None:
+    global _BW_SESSION_CACHE
+
+    existing = os.getenv("BW_SESSION")
+    if existing:
+        _BW_SESSION_CACHE = existing
+        return existing
+    if _BW_SESSION_CACHE:
+        return _BW_SESSION_CACHE
+    if not shutil.which("bw"):
+        return None
+    if not (os.isatty(0) and os.isatty(1)):
+        return None
+
+    _ensure_bw_env()
+    status = _bw_status()
+    if status == "unauthenticated":
+        print("ℹ️  Bitwarden: требуется login (bw login)")
+        login_proc = subprocess.run(["bw", "login"], check=False)
+        if login_proc.returncode != 0:
+            return None
+    if status in {"locked", "unauthenticated", None}:
+        print("ℹ️  Bitwarden: требуется unlock (bw unlock)")
+    try:
+        unlock_proc = subprocess.run(
+            ["bw", "unlock", "--raw"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if unlock_proc.returncode == 0:
+            session = unlock_proc.stdout.strip()
+            if session:
+                _BW_SESSION_CACHE = session
+                os.environ["BW_SESSION"] = session
+                return session
+    except Exception:
+        return None
+    return None
+
+
+def _bw_run(args: list[str], session: str | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
+    cmd = ["bw", *args]
+    if session:
+        cmd.extend(["--session", session])
+    return subprocess.run(
+        cmd,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=timeout,
+    )
+
+
+def _bw_find_item_id(item_name: str, session: str | None = None) -> str | None:
+    proc = _bw_run(["list", "items", "--search", item_name, "--raw"], session=session, timeout=45)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        items = json.loads(proc.stdout)
+        if not isinstance(items, list):
+            return None
+    except Exception:
+        return None
+
+    target = item_name.strip().lower()
+    exact = [it for it in items if str(it.get("name", "")).strip().lower() == target]
+    candidate = exact[0] if exact else (items[0] if items else None)
+    if not isinstance(candidate, dict):
+        return None
+    raw_id = candidate.get("id")
+    return str(raw_id).strip() if raw_id else None
+
+
+def _bw_extract_field(item: dict, field: str) -> str | None:
+    f = (field or "password").strip()
+    if not f:
+        f = "password"
+    login = item.get("login") if isinstance(item.get("login"), dict) else {}
+
+    if f == "password":
+        return _value_to_string(login.get("password"))
+    if f == "username":
+        return _value_to_string(login.get("username"))
+    if f == "notes":
+        return _value_to_string(item.get("notes"))
+    if f == "uri":
+        uris = login.get("uris") or []
+        if isinstance(uris, list) and uris:
+            first = uris[0]
+            if isinstance(first, dict):
+                return _value_to_string(first.get("uri"))
+        return None
+    if f.startswith("custom:"):
+        need = f.split(":", 1)[1].strip().lower()
+        fields = item.get("fields") or login.get("fields") or []
+        if isinstance(fields, list):
+            for entry in fields:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name", "")).strip().lower()
+                if name == need:
+                    return _value_to_string(entry.get("value"))
+        return None
+    return None
+
+
+def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str | None:
+    if not item_name:
+        return None
+    if not shutil.which("bw"):
+        return None
+
+    _ensure_bw_env()
+    # 1) Пытаемся использовать существующую сессию (или unlocked state) без интерактива.
+    for session in (os.getenv("BW_SESSION"), _BW_SESSION_CACHE, None):
+        item_id = _bw_find_item_id(item_name, session=session)
+        if not item_id:
+            continue
+        proc = _bw_run(["get", "item", item_id, "--raw"], session=session, timeout=45)
+        if proc.returncode != 0 or not proc.stdout.strip():
+            continue
+        try:
+            item_obj = json.loads(proc.stdout)
+            if isinstance(item_obj, dict):
+                value = _bw_extract_field(item_obj, field=field)
+                if value:
+                    return value
+        except Exception:
+            continue
+
+    # 2) Если не получилось и есть TTY — пробуем интерактивно unlock.
+    session = _ensure_bw_session()
+    if not session:
+        return None
+    item_id = _bw_find_item_id(item_name, session=session)
+    if not item_id:
+        return None
+    proc = _bw_run(["get", "item", item_id, "--raw"], session=session, timeout=45)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        item_obj = json.loads(proc.stdout)
+        if isinstance(item_obj, dict):
+            return _bw_extract_field(item_obj, field=field)
+    except Exception:
+        return None
+    return None
+
+
+def _load_api_key(
+    env_var: str,
+    config_key: str,
+    bw_item_env_var: str,
+    bw_field_env_var: str,
+    bw_default_item: str,
+) -> str | None:
+    # 1) ENV (основной путь)
+    api_key = _value_to_string(os.getenv(env_var))
+    if api_key:
+        return api_key
+
+    config = _load_provider_config()
+
+    # 2) Bitwarden CLI (основной путь)
+    bw_item = _value_to_string(os.getenv(bw_item_env_var)) or _value_to_string(config.get(f"{config_key}_bw_item")) or bw_default_item
+    bw_field = _value_to_string(os.getenv(bw_field_env_var)) or _value_to_string(config.get(f"{config_key}_bw_field")) or "password"
+    api_key = _load_api_key_from_bw(bw_item, field=bw_field)
+    if api_key:
+        os.environ[env_var] = api_key
+        return api_key
+
+    # 3) provider-config.yaml (опциональный fallback)
+    api_key = _value_to_string(config.get(config_key))
+    if api_key:
+        os.environ[env_var] = api_key
+        return api_key
+    return None
+
+
 def run_hunter(domain: str, out_path: Path) -> None:
-    api_key = _load_api_key("HUNTER_API_KEY", "hunter_io")
+    api_key = _load_api_key(
+        env_var="HUNTER_API_KEY",
+        config_key="hunter_io",
+        bw_item_env_var="RECONX_BW_HUNTER_ITEM",
+        bw_field_env_var="RECONX_BW_HUNTER_FIELD",
+        bw_default_item="reconx/hunter_io",
+    )
     if not api_key:
         out_path.write_text("{}", encoding="utf-8")
-        print("⚠️  HUNTER_API_KEY не установлен, пропускаю")
+        print("⚠️  HUNTER_API_KEY не найден (ENV/Bitwarden/provider-config), пропускаю")
         return
 
     try:
@@ -211,10 +453,16 @@ def run_hunter(domain: str, out_path: Path) -> None:
 
 
 def run_snusbase(domain: str, out_path: Path) -> None:
-    api_key = _load_api_key("SNUSBASE_API_KEY", "snusbase")
+    api_key = _load_api_key(
+        env_var="SNUSBASE_API_KEY",
+        config_key="snusbase",
+        bw_item_env_var="RECONX_BW_SNUSBASE_ITEM",
+        bw_field_env_var="RECONX_BW_SNUSBASE_FIELD",
+        bw_default_item="reconx/snusbase",
+    )
     if not api_key:
         out_path.write_text("{}", encoding="utf-8")
-        print("⚠️  SNUSBASE_API_KEY не установлен, пропускаю")
+        print("⚠️  SNUSBASE_API_KEY не найден (ENV/Bitwarden/provider-config), пропускаю")
         return
 
     try:

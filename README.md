@@ -107,22 +107,54 @@ reconx example.com --debug
 
 ## Конфигурация
 
-Скопируйте пример и заполните API-ключи:
+Основной приоритет источников ключей:
+
+1. `ENV` (`HUNTER_API_KEY`, `SNUSBASE_API_KEY`)
+2. `Bitwarden CLI` (`bw`)
+3. `provider-config.yaml` (опциональный fallback)
+
+### Вариант 1: ENV (самый простой)
+
+```bash
+export HUNTER_API_KEY="..."
+export SNUSBASE_API_KEY="..."
+```
+
+### Вариант 2: Bitwarden CLI (рекомендуется)
+
+По умолчанию ReconX ищет items:
+- `reconx/hunter_io` (поле `password`)
+- `reconx/snusbase` (поле `password`)
+
+Переопределить item/поле можно через ENV:
+
+```bash
+export RECONX_BW_HUNTER_ITEM="my/hunter-item"
+export RECONX_BW_HUNTER_FIELD="password"      # или custom:FIELD
+export RECONX_BW_SNUSBASE_ITEM="my/snus-item"
+export RECONX_BW_SNUSBASE_FIELD="password"    # или custom:FIELD
+```
+
+Если `bw` в статусе `locked`, ReconX в интерактивном TTY попросит unlock.
+
+### Вариант 3: `provider-config.yaml` (опционально)
 
 ```bash
 mkdir -p ~/.config/reconx
 cp provider-config.yaml.example ~/.config/reconx/provider-config.yaml
 ```
 
-Файл `~/.config/reconx/provider-config.yaml`:
+Пример `~/.config/reconx/provider-config.yaml`:
 
 ```yaml
 hunter_io: [your_hunter_api_key]
 snusbase: [your_snusbase_api_key]
-deepseek_api: [your_deepseek_api_key]
+# Опционально: явные ссылки на Bitwarden item/field
+hunter_io_bw_item: reconx/hunter_io
+hunter_io_bw_field: password
+snusbase_bw_item: reconx/snusbase
+snusbase_bw_field: password
 ```
-
-Без конфига соответствующие провайдеры пропускаются.
 
 ## Данные
 

@@ -1,6 +1,12 @@
 # Конфигурация провайдеров для ReconX
 # Скопируйте в ~/.config/reconx/provider-config.yaml
+# Файл опциональный: приоритет ENV -> Bitwarden CLI -> этот YAML (fallback)
 
 hunter_io: [your_hunter_api_key]
 snusbase: [your_snusbase_api_key]
-deepseek_api: [your_deepseek_api_key]
+
+# Опционально: откуда брать ключи через Bitwarden
+hunter_io_bw_item: reconx/hunter_io
+hunter_io_bw_field: password
+snusbase_bw_item: reconx/snusbase
+snusbase_bw_field: password

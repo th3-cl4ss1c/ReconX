@@ -7,35 +7,6 @@ import shutil
 import os
 import subprocess
 
-# Загружаем конфигурацию провайдеров из provider-config.yaml ПЕРЕД импортом модулей
-# Используем только стандартное место ~/.config/reconx/provider-config.yaml
-# для совместимости с pipx и изолированными окружениями
-try:
-    import yaml
-    config_file = Path.home() / ".config" / "reconx" / "provider-config.yaml"
-    if config_file.exists():
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-                for key, env_var in (
-                    ("hunter_io", "HUNTER_API_KEY"),
-                    ("snusbase", "SNUSBASE_API_KEY"),
-                    ("deepseek_api", "DEEPSEEK_API_KEY"),
-                ):
-                    val = config.get(key)
-                    if val:
-                        api_key = val[0] if isinstance(val, list) else val
-                        os.environ[env_var] = str(api_key)
-        except Exception:
-            # Игнорируем ошибки чтения конфига
-            pass
-except ImportError:
-    # PyYAML не установлен - конфиг не загружается
-    pass
-except Exception:
-    # Игнорируем другие ошибки
-    pass
-
 from reconx import __version__
 from reconx.modules.workspace import WorkspaceModule
 from reconx.modules import EnumModule, ProbeModule
