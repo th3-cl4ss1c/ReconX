@@ -82,52 +82,47 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _restore_terminal() -> None:
     """Восстанавливает терминал в нормальное состояние."""
-    if not sys.stdin.isatty():
+    if not sys.stdin.isatty() and not Path("/dev/tty").exists():
         return
-    
-    # Пробуем восстановить через прямой доступ к терминалу через /dev/tty
-    # Это более надежно, чем через stdin, так как работает напрямую с терминалом
+
+    # Пробуем восстановить через stty (наиболее совместимый путь).
     try:
-        # Используем прямой доступ к /dev/tty для восстановления
-        os.system('stty sane < /dev/tty 2>/dev/null')
+        os.system("stty sane < /dev/tty 2>/dev/null")
     except Exception:
-        # Если не получилось, пробуем обычный способ
         try:
-            os.system('stty sane 2>/dev/null')
+            os.system("stty sane 2>/dev/null")
         except Exception:
             pass
-    
-    # Дополнительно: восстановление через termios для установки критических флагов
+
+    # Дополнительно восстанавливаем ключевые termios-флаги.
     try:
         import termios
-        # Пробуем через /dev/tty напрямую
+
+        def _restore_fd(fd: int) -> None:
+            attrs = termios.tcgetattr(fd)
+            # lflag: cooked mode + echo + сигналы (Ctrl+C, Ctrl+Z)
+            attrs[3] = attrs[3] | termios.ICANON | termios.ECHO | termios.ISIG
+            # iflag: корректная интерпретация Enter как CR->NL
+            attrs[0] = attrs[0] | termios.ICRNL
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+
         try:
-            with open('/dev/tty', 'r+b') as tty_fd:
-                fd = tty_fd.fileno()
-                attrs = termios.tcgetattr(fd)
-                # Устанавливаем критически важные флаги для cooked mode
-                attrs[3] = attrs[3] | termios.ICANON | termios.ECHO | termios.ISIG
-                attrs[3] = attrs[3] | termios.ICRNL
-                termios.tcsetattr(fd, termios.TCSANOW, attrs)
+            with open("/dev/tty", "r+b") as tty_fd:
+                _restore_fd(tty_fd.fileno())
         except (OSError, termios.error, FileNotFoundError):
-            # Если не получилось через /dev/tty, пробуем через stdin
             try:
                 fd = sys.stdin.fileno()
                 if fd >= 0:
-                    attrs = termios.tcgetattr(fd)
-                    attrs[3] = attrs[3] | termios.ICANON | termios.ECHO | termios.ISIG
-                    attrs[3] = attrs[3] | termios.ICRNL
-                    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+                    _restore_fd(fd)
             except (OSError, termios.error):
                 pass
     except (ImportError, AttributeError):
         pass
     except Exception:
         pass
-    
-    # Принудительно сбрасываем буферы
+
+    # Принудительно сбрасываем буферы вывода.
     try:
-        sys.stdin.flush()
         sys.stdout.flush()
         sys.stderr.flush()
     except Exception:
