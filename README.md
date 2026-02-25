@@ -125,8 +125,8 @@ export SNUSBASE_API_KEY="..."
 ### Вариант 2: Bitwarden CLI (рекомендуется)
 
 По умолчанию ReconX ищет items:
-- `reconx/hunter_io` (поле `password`)
-- `reconx/snusbase` (поле `password`)
+- `hunter` (поле `password`)
+- `snusbase` (поле `password`)
 
 Переопределить item/поле можно через ENV:
 
@@ -166,9 +166,9 @@ cp provider-config.yaml.example ~/.config/reconx/provider-config.yaml
 hunter_io: [your_hunter_api_key]
 snusbase: [your_snusbase_api_key]
 # Опционально: явные ссылки на Bitwarden item/field
-hunter_io_bw_item: reconx/hunter_io
+hunter_io_bw_item: hunter
 hunter_io_bw_field: password
-snusbase_bw_item: reconx/snusbase
+snusbase_bw_item: snusbase
 snusbase_bw_field: password
 ```
 

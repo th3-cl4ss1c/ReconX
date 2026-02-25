@@ -329,7 +329,7 @@ def run_hunter(domain: str, out_path: Path) -> None:
         config_key="hunter_io",
         bw_item_env_var="RECONX_BW_HUNTER_ITEM",
         bw_field_env_var="RECONX_BW_HUNTER_FIELD",
-        bw_default_item="reconx/hunter_io",
+        bw_default_item="hunter",
     )
     if not api_key:
         out_path.write_text("{}", encoding="utf-8")
@@ -517,7 +517,7 @@ def run_snusbase(domain: str, out_path: Path) -> None:
         config_key="snusbase",
         bw_item_env_var="RECONX_BW_SNUSBASE_ITEM",
         bw_field_env_var="RECONX_BW_SNUSBASE_FIELD",
-        bw_default_item="reconx/snusbase",
+        bw_default_item="snusbase",
     )
     if not api_key:
         out_path.write_text("{}", encoding="utf-8")
