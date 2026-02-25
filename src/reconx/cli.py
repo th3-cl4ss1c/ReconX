@@ -394,7 +394,8 @@ def _run_init(args: argparse.Namespace) -> int:
                 completed_runs.append((target, target_dir))
                 active_target_dir = None
 
-        _prompt_nuclei_after_run(completed_runs)
+        # TEMP: интерактивный post-run запуск nuclei временно отключён.
+        # _prompt_nuclei_after_run(completed_runs)
 
         print("\n✅ Готово")
         return 0
