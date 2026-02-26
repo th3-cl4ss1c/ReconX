@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -253,9 +254,7 @@ def _download_prebuilt(name: str, repo: str, bin_path: Path, platform_os: str, a
         return None
 
     assets = data.get("assets", [])
-    download_url = None
-    archive_ext = None
-
+    candidates: list[tuple[str, str]] = []
     for asset in assets:
         aname = asset.get("name", "")
         aname_lower = aname.lower()
@@ -263,55 +262,58 @@ def _download_prebuilt(name: str, repo: str, bin_path: Path, platform_os: str, a
             continue
         if match_suffix in aname_lower or alt_suffix.lower() in aname_lower:
             download_url = asset.get("browser_download_url")
-            if download_url:
-                if aname_lower.endswith(".zip"):
-                    archive_ext = ".zip"
-                elif ".tar.xz" in aname_lower:
-                    archive_ext = ".tar.xz"
-                elif ".tar.gz" in aname_lower or aname_lower.endswith(".tgz"):
-                    archive_ext = ".tar.gz"
-                else:
-                    archive_ext = ".zip"
-                break
+            if not download_url:
+                continue
+            if aname_lower.endswith(".zip"):
+                archive_ext = ".zip"
+            elif ".tar.xz" in aname_lower:
+                archive_ext = ".tar.xz"
+            elif ".tar.gz" in aname_lower or aname_lower.endswith(".tgz"):
+                archive_ext = ".tar.gz"
+            else:
+                archive_ext = ".zip"
+            candidates.append((download_url, archive_ext))
 
-    if not download_url or not archive_ext:
+    if not candidates:
         return None
 
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            arc_path = tmp / f"download{archive_ext}"
-            _download(download_url, arc_path)
+    for download_url, archive_ext in candidates:
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                arc_path = tmp / f"download{archive_ext}"
+                _download(download_url, arc_path)
 
-            if archive_ext == ".zip":
-                _extract_zip(arc_path, tmp)
-            else:
-                _extract_tar(arc_path, tmp)
+                if archive_ext == ".zip":
+                    _extract_zip(arc_path, tmp)
+                else:
+                    _extract_tar(arc_path, tmp)
 
-            binary = None
-            for path_candidate in tmp.rglob("*"):
-                if path_candidate.is_file() and path_candidate.name == name:
-                    binary = path_candidate
-                    break
-            if not binary:
-                for path_candidate in tmp.rglob(name):
-                    if path_candidate.is_file():
+                binary = None
+                for path_candidate in tmp.rglob("*"):
+                    if path_candidate.is_file() and path_candidate.name == name:
                         binary = path_candidate
                         break
-            if binary:
-                _atomic_install_binary(binary, target)
-                if _smoke_check_binary(name, target):
-                    return target
-                target.unlink(missing_ok=True)
-    except Exception:
-        pass
+                if not binary:
+                    for path_candidate in tmp.rglob(name):
+                        if path_candidate.is_file():
+                            binary = path_candidate
+                            break
+                if binary:
+                    _atomic_install_binary(binary, target)
+                    if _smoke_check_binary(name, target):
+                        return target
+                    target.unlink(missing_ok=True)
+        except Exception:
+            continue
     return None
 
 
 def _build_massdns(bin_path: Path) -> Path:
     """
     Сборка massdns из исходников (готовых релизов нет).
-    Требует make, gcc. GIT_DISCOVERY_ACROSS_FILESYSTEM=1 избегает ошибки git в tmp.
+    Требует make, gcc. Принудительно задаём MASSDNS_REVISION пустой строкой,
+    чтобы make не пытался читать git-метаданные в zip-архиве.
     """
     src_url = "https://github.com/blechschmidt/massdns/archive/refs/heads/master.zip"
     env = os.environ.copy()
@@ -325,7 +327,13 @@ def _build_massdns(bin_path: Path) -> Path:
         if not src_root:
             raise RuntimeError("Не найден каталог massdns после распаковки")
         try:
-            subprocess.run(["make"], cwd=src_root, check=True, env=env, timeout=600)
+            subprocess.run(
+                ["make", "PROJECT_FLAGS=-DMASSDNS_REVISION=\\\"\\\""],
+                cwd=src_root,
+                check=True,
+                env=env,
+                timeout=600,
+            )
         except subprocess.CalledProcessError as error:
             raise_on_interrupt_returncode(error.returncode)
             raise
@@ -337,6 +345,61 @@ def _build_massdns(bin_path: Path) -> Path:
         if not _smoke_check_binary("massdns", dest):
             raise RuntimeError("Сборка massdns дала нерабочий бинарь")
         return dest
+
+
+def _download_vulnx_from_releases_page(bin_path: Path, platform_os: str, arch: str) -> Path | None:
+    """
+    Fallback для vulnx, если GitHub API недоступен (например, rate limit).
+    Ищет download-ссылку на странице releases и ставит бинарь как обычно.
+    """
+    if platform_os != "linux":
+        return None
+
+    target = bin_path / "vulnx"
+    if target.exists():
+        if _smoke_check_binary("vulnx", target):
+            return target
+        target.unlink(missing_ok=True)
+
+    releases_url = "https://github.com/projectdiscovery/cvemap/releases"
+    try:
+        req = urllib.request.Request(releases_url, headers={"User-Agent": "ReconX/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    pattern = re.compile(
+        rf'href="(/projectdiscovery/cvemap/releases/download/[^"]*/vulnx_[^"]*_{platform_os}_{arch}\.zip)"',
+        re.IGNORECASE,
+    )
+    match = pattern.search(html)
+    if not match:
+        return None
+
+    download_url = f"https://github.com{match.group(1)}"
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            arc_path = tmp / "vulnx.zip"
+            _download(download_url, arc_path)
+            _extract_zip(arc_path, tmp)
+
+            binary = None
+            for path_candidate in tmp.rglob("*"):
+                if path_candidate.is_file() and path_candidate.name == "vulnx":
+                    binary = path_candidate
+                    break
+            if not binary:
+                return None
+
+            _atomic_install_binary(binary, target)
+            if _smoke_check_binary("vulnx", target):
+                return target
+            target.unlink(missing_ok=True)
+    except Exception:
+        return None
+    return None
 
 
 def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, Path], Iterable[str], Iterable[str]]:
@@ -462,6 +525,12 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
                 path = _download_prebuilt(name, repo, bin_path, platform_os, arch)
                 if path and _smoke_check_binary(name, path):
                     found[name] = path
+
+            # 1b) Дополнительный fallback для vulnx без GitHub API.
+            if "vulnx" not in found:
+                vulnx_path = _download_vulnx_from_releases_page(bin_path, platform_os, arch)
+                if vulnx_path and _smoke_check_binary("vulnx", vulnx_path):
+                    found["vulnx"] = vulnx_path
 
             # 2) Go install для тех, кого не нашли в prebuilt
             for name in [n for n, _ in PREBUILT_TOOLS]:

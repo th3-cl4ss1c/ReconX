@@ -18,6 +18,13 @@ _BW_AUTH_WARNED: bool = False
 _BW_SESSION_PROMPTED: bool = False
 
 
+def _bw_prompt_enabled() -> bool:
+    value = _value_to_string(os.getenv("RECONX_BW_PROMPT"))
+    if value is None:
+        return True
+    return value.lower() not in {"0", "false", "no", "off"}
+
+
 def _load_provider_config() -> dict:
     global _PROVIDER_CONFIG_CACHE
     if _PROVIDER_CONFIG_CACHE is not None:
@@ -149,6 +156,9 @@ def _ensure_bw_session_from_input() -> str | None:
     if _BW_SESSION_CACHE:
         return _BW_SESSION_CACHE
     if _BW_SESSION_PROMPTED:
+        return None
+    if not _bw_prompt_enabled():
+        _BW_SESSION_PROMPTED = True
         return None
 
     _BW_SESSION_PROMPTED = True
