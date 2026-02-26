@@ -109,13 +109,17 @@ reconx example.com --debug
 # Обновить resolvers через dnsvalidator в течение 500 секунд
 reconx -pr 500
 
+# Обновить resolvers через dnsvalidator в 100 потоков
+reconx -pr 500 -prt 100
+
 # Обновить resolvers и сразу запустить enum/scan
-reconx -pr 500 example.com
+reconx -pr 500 -prt 100 example.com
 ```
 
 `-pr/--parse-resolve N` запускает `dnsvalidator` (из `vortexau/dnsvalidator`) на `N` секунд и сохраняет валидные резолверы в `~/.local/share/reconx/resolvers.txt` (или `RECONX_DATA_DIR/resolvers.txt`).
 Базовый вызов: `dnsvalidator -tL https://public-dns.info/nameservers.txt -threads 20 -o <path>`.
-Источник кандидатов можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`, число потоков — через `RECONX_DNSVALIDATOR_THREADS`.
+Число потоков по умолчанию: `20`, изменить можно через `-prt/--parse-resolve-threads`.
+Источник кандидатов можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`.
 
 ## Конфигурация
 

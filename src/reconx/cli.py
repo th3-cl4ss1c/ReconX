@@ -98,6 +98,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Обновить resolvers через dnsvalidator в течение N секунд (например: -pr 500).",
     )
+    parser.add_argument(
+        "-prt",
+        "--parse-resolve-threads",
+        dest="parse_resolve_threads",
+        type=_positive_int,
+        metavar="THREADS",
+        default=20,
+        help="Число потоков для dnsvalidator при -pr (по умолчанию: 20).",
+    )
 
     return parser
 
@@ -165,7 +174,12 @@ def _read_nonempty_lines(path: Path, skip_comments: bool = False) -> list[str]:
     return result
 
 
-def _refresh_resolvers_with_dnsvalidator(data_dir: Path, seconds: int, dnsvalidator_bin: str | None) -> None:
+def _refresh_resolvers_with_dnsvalidator(
+    data_dir: Path,
+    seconds: int,
+    dnsvalidator_bin: str | None,
+    threads: int,
+) -> None:
     if not dnsvalidator_bin:
         print("⚠️  dnsvalidator не найден, обновление resolvers пропущено.", file=sys.stderr)
         return
@@ -174,20 +188,16 @@ def _refresh_resolvers_with_dnsvalidator(data_dir: Path, seconds: int, dnsvalida
         tmp_path = Path(tmp.name)
     try:
         targets_url = os.getenv("RECONX_DNSVALIDATOR_TARGETS_URL", "https://public-dns.info/nameservers.txt")
-        try:
-            dnsvalidator_threads = max(1, int(os.getenv("RECONX_DNSVALIDATOR_THREADS", "20")))
-        except ValueError:
-            dnsvalidator_threads = 20
         cmd = [
             dnsvalidator_bin,
             "-tL",
             targets_url,
             "-threads",
-            str(dnsvalidator_threads),
+            str(threads),
             "-o",
             str(tmp_path),
         ]
-        print(f"🧩 Обновляю resolvers через dnsvalidator ({seconds}s)...")
+        print(f"🧩 Обновляю resolvers через dnsvalidator ({seconds}s, threads={threads})...")
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -420,7 +430,12 @@ def _run_init(args: argparse.Namespace) -> int:
 
         if args.parse_resolve:
             dnsvalidator_bin = str(binaries.get("dnsvalidator")) if binaries.get("dnsvalidator") else shutil.which("dnsvalidator")
-            _refresh_resolvers_with_dnsvalidator(data_dir, args.parse_resolve, dnsvalidator_bin)
+            _refresh_resolvers_with_dnsvalidator(
+                data_dir,
+                args.parse_resolve,
+                dnsvalidator_bin,
+                args.parse_resolve_threads,
+            )
 
         targets: list[Target] = load_targets(
             list_path=args.list_path,
