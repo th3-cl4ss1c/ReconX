@@ -13,6 +13,7 @@ from reconx import __version__
 from reconx.modules.workspace import WorkspaceModule
 from reconx.modules import EnumModule, ProbeModule
 from reconx.utils.process import raise_on_interrupt_returncode
+from reconx.utils.resolvers import collect_resolver_candidates, normalize_resolvers, validate_resolvers_fast
 from reconx.utils.targets import Target, load_targets
 
 
@@ -170,18 +171,22 @@ def _refresh_resolvers_with_dnsvalidator(data_dir: Path, seconds: int, dnsvalida
         print("⚠️  dnsvalidator не найден, обновление resolvers пропущено.", file=sys.stderr)
         return
     resolvers_path = data_dir / "resolvers.txt"
+    existing = normalize_resolvers(_read_nonempty_lines(resolvers_path))
+    overall_started = time.monotonic()
     with tempfile.NamedTemporaryFile(prefix="reconx-resolvers-", suffix=".txt", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
         targets_url = os.getenv("RECONX_DNSVALIDATOR_TARGETS_URL", "https://public-dns.info/nameservers.txt")
-        threads = max(20, min(120, (os.cpu_count() or 4) * 8))
+        dnsvalidator_threads = max(20, min(120, (os.cpu_count() or 4) * 8))
         per_request_timeout = max(4, min(20, max(1, seconds // 20)))
+        dnsvalidator_budget = max(5, int(seconds * 0.6))
+        dnsvalidator_budget = min(dnsvalidator_budget, seconds)
         cmd = [
             dnsvalidator_bin,
             "-tL",
             targets_url,
             "-threads",
-            str(threads),
+            str(dnsvalidator_threads),
             "-timeout",
             str(per_request_timeout),
             "--silent",
@@ -189,14 +194,14 @@ def _refresh_resolvers_with_dnsvalidator(data_dir: Path, seconds: int, dnsvalida
             "-o",
             str(tmp_path),
         ]
-        print(f"🧩 Обновляю resolvers через dnsvalidator ({seconds}s)...")
+        print(f"🧩 Обновляю resolvers через dnsvalidator ({seconds}s, budget={dnsvalidator_budget}s)...")
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
-        deadline = time.monotonic() + seconds
+        deadline = time.monotonic() + dnsvalidator_budget
         while proc.poll() is None and time.monotonic() < deadline:
             time.sleep(0.25)
 
@@ -215,14 +220,33 @@ def _refresh_resolvers_with_dnsvalidator(data_dir: Path, seconds: int, dnsvalida
             if proc.returncode != 0:
                 print(f"⚠️  dnsvalidator завершился с ошибкой (код {proc.returncode})", file=sys.stderr)
 
-        lines = sorted({ln.strip() for ln in tmp_path.read_text(encoding="utf-8").splitlines() if ln.strip()})
-        if not lines:
-            print("⚠️  dnsvalidator не вернул валидные resolvers, оставляю текущий файл.", file=sys.stderr)
+        dnsvalidator_lines = normalize_resolvers(tmp_path.read_text(encoding="utf-8").splitlines())
+
+        elapsed = int(time.monotonic() - overall_started)
+        fallback_budget = max(0, seconds - elapsed)
+        fallback_lines: list[str] = []
+        if fallback_budget >= 3:
+            workers = max(128, min(512, (os.cpu_count() or 4) * 64))
+            print(f"🧪 Дополняю быстрым валидатором ({fallback_budget}s, workers={workers})...")
+            candidates = collect_resolver_candidates(primary_source=targets_url, max_candidates=20000)
+            fallback_lines = validate_resolvers_fast(
+                candidates,
+                duration_sec=fallback_budget,
+                workers=workers,
+                max_valid=5000,
+            )
+
+        merged = sorted(set(existing) | set(dnsvalidator_lines) | set(fallback_lines))
+        if not merged:
+            print("⚠️  Не удалось получить валидные resolvers, оставляю текущий файл.", file=sys.stderr)
             return
         resolvers_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        tmp_path.write_text("\n".join(merged) + ("\n" if merged else ""), encoding="utf-8")
         os.replace(tmp_path, resolvers_path)
-        print(f"✅ Resolvers обновлены: {len(lines)}")
+        print(
+            f"✅ Resolvers обновлены: {len(merged)} "
+            f"(dnsvalidator={len(dnsvalidator_lines)}, fast={len(fallback_lines)}, was={len(existing)})"
+        )
         if timed_out:
             print("ℹ️  dnsvalidator остановлен по лимиту времени.")
     except Exception as error:

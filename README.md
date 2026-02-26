@@ -113,7 +113,7 @@ reconx -pr 500
 reconx -pr 500 example.com
 ```
 
-`-pr/--parse-resolve N` запускает `dnsvalidator` (внутри это `vortexau/dnsvalidator`) на `N` секунд и сохраняет найденные валидные резолверы в `~/.local/share/reconx/resolvers.txt` (или `RECONX_DATA_DIR/resolvers.txt`).
+`-pr/--parse-resolve N` запускает `dnsvalidator` (внутри это `vortexau/dnsvalidator`) на `N` секунд и затем дополняет результат встроенным быстрым UDP-валидатором в оставшееся время. Итоговый список сохраняется в `~/.local/share/reconx/resolvers.txt` (или `RECONX_DATA_DIR/resolvers.txt`).
 По умолчанию источник кандидатов: `https://public-dns.info/nameservers.txt`, его можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`.
 
 ## Конфигурация
