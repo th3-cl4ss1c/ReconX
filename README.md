@@ -72,7 +72,7 @@ pipx uninstall reconx
 
 ReconX автоматически скачивает нужные утилиты в `~/.cache/reconx/bin` при первом запуске.
 
-- Автоуправляемые утилиты: `subfinder`, `shuffledns`, `massdns`, `dnsx`, `smap`, `naabu`, `httpx`, `nuclei`, `katana`, `gau`, `vulnx`.
+- Автоуправляемые утилиты: `dns_validate` (wrapper для `vortexau/dnsvalidator`), `subfinder`, `shuffledns`, `massdns`, `dnsx`, `smap`, `naabu`, `httpx`, `nuclei`, `katana`, `gau`, `vulnx`.
 - Системно рекомендуется: `nmap` (для уровней агрессии `2` и `3`) и `build-essential` (для fallback-сборки `massdns`, если готовый бинарь недоступен).
 
 Пример для Ubuntu/Debian:
@@ -105,7 +105,16 @@ reconx -l targets.txt --list-id custom01
 
 # Подробный лог (nmap, таймауты и т.д.)
 reconx example.com --debug
+
+# Обновить resolvers через dnsvalidator в течение 500 секунд
+reconx -pr 500
+
+# Обновить resolvers и сразу запустить enum/scan
+reconx -pr 500 example.com
 ```
+
+`-pr/--parse-resolve N` запускает `dns_validate` (внутри это `vortexau/dnsvalidator`) на `N` секунд и сохраняет найденные валидные резолверы в `~/.local/share/reconx/resolvers.txt` (или `RECONX_DATA_DIR/resolvers.txt`).
+По умолчанию источник кандидатов: `https://public-dns.info/nameservers.txt`, его можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`.
 
 ## Конфигурация
 
@@ -177,6 +186,7 @@ snusbase_bw_field: password
 Каталог `~/.local/share/reconx/` (или `RECONX_DATA_DIR`):
 
 - `resolvers.txt` — копируется из пакета при первом запуске
+- `resolvers.txt` — можно обновить через `reconx -pr <seconds>` (dnsvalidator)
 - `wordlists/` — wordlist для subdomain bruteforce (SecLists, скачивается автоматически)
 
 ## Лицензия

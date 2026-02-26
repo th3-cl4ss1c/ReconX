@@ -6,6 +6,8 @@ from pathlib import Path
 import shutil
 import os
 import subprocess
+import tempfile
+import time
 
 from reconx import __version__
 from reconx.modules.workspace import WorkspaceModule
@@ -33,6 +35,16 @@ def _ensure_data_dir_env() -> None:
 
 from reconx.utils.tools import ensure_external_tools
 from reconx.utils.data import ensure_data_dir, get_data_dir
+
+
+def _positive_int(value: str) -> int:
+    try:
+        num = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("значение должно быть целым числом") from error
+    if num <= 0:
+        raise argparse.ArgumentTypeError("значение должно быть больше 0")
+    return num
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -76,6 +88,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--debug",
         action="store_true",
         help="Подробный лог запуска (nmap команды, попытки, таймауты).",
+    )
+    parser.add_argument(
+        "-pr",
+        "--parse-resolve",
+        dest="parse_resolve",
+        type=_positive_int,
+        metavar="SECONDS",
+        default=None,
+        help="Обновить resolvers через dns_validate в течение N секунд (например: -pr 500).",
     )
 
     return parser
@@ -142,6 +163,72 @@ def _read_nonempty_lines(path: Path, skip_comments: bool = False) -> list[str]:
             continue
         result.append(line)
     return result
+
+
+def _refresh_resolvers_with_dns_validate(data_dir: Path, seconds: int, dns_validate_bin: str | None) -> None:
+    if not dns_validate_bin:
+        print("⚠️  dns_validate не найден, обновление resolvers пропущено.", file=sys.stderr)
+        return
+    resolvers_path = data_dir / "resolvers.txt"
+    with tempfile.NamedTemporaryFile(prefix="reconx-resolvers-", suffix=".txt", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        targets_url = os.getenv("RECONX_DNSVALIDATOR_TARGETS_URL", "https://public-dns.info/nameservers.txt")
+        threads = max(20, min(120, (os.cpu_count() or 4) * 8))
+        per_request_timeout = max(4, min(20, max(1, seconds // 20)))
+        cmd = [
+            dns_validate_bin,
+            "-tL",
+            targets_url,
+            "-threads",
+            str(threads),
+            "-timeout",
+            str(per_request_timeout),
+            "--silent",
+            "--no-color",
+            "-o",
+            str(tmp_path),
+        ]
+        print(f"🧩 Обновляю resolvers через dnsvalidator ({seconds}s)...")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        deadline = time.monotonic() + seconds
+        while proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.25)
+
+        timed_out = False
+        if proc.poll() is None:
+            timed_out = True
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+
+        if not timed_out and proc.returncode is not None:
+            raise_on_interrupt_returncode(proc.returncode)
+            if proc.returncode != 0:
+                print(f"⚠️  dnsvalidator завершился с ошибкой (код {proc.returncode})", file=sys.stderr)
+
+        lines = sorted({ln.strip() for ln in tmp_path.read_text(encoding="utf-8").splitlines() if ln.strip()})
+        if not lines:
+            print("⚠️  dnsvalidator не вернул валидные resolvers, оставляю текущий файл.", file=sys.stderr)
+            return
+        resolvers_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        os.replace(tmp_path, resolvers_path)
+        print(f"✅ Resolvers обновлены: {len(lines)}")
+        if timed_out:
+            print("ℹ️  dnsvalidator остановлен по лимиту времени.")
+    except Exception as error:
+        print(f"⚠️  Не удалось обновить resolvers: {error}", file=sys.stderr)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _nuclei_profiles(mode: str) -> dict[str, dict[str, str]]:
@@ -333,12 +420,19 @@ def _run_init(args: argparse.Namespace) -> int:
             print(f"\n🔧 Tools: " + ", ".join(sorted(binaries.keys())))
             print(f"📁 bin: {bin_dir}")
 
+        if args.parse_resolve:
+            dns_validate_bin = str(binaries.get("dns_validate")) if binaries.get("dns_validate") else shutil.which("dns_validate")
+            _refresh_resolvers_with_dns_validate(data_dir, args.parse_resolve, dns_validate_bin)
+
         targets: list[Target] = load_targets(
             list_path=args.list_path,
             inline_targets=args.targets,
         )
 
         if not targets:
+            if args.parse_resolve:
+                print("\n✅ Готово")
+                return 0
             print("❌ Не указаны цели. Используйте позиционные аргументы или -l", file=sys.stderr)
             return 1
 
