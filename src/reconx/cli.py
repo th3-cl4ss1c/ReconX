@@ -184,8 +184,14 @@ def _refresh_resolvers_with_dnsvalidator(
         print("⚠️  dnsvalidator не найден, обновление resolvers пропущено.", file=sys.stderr)
         return
     resolvers_path = data_dir / "resolvers.txt"
+    resolvers_path.parent.mkdir(parents=True, exist_ok=True)
     proc: subprocess.Popen | None = None
-    with tempfile.NamedTemporaryFile(prefix="reconx-resolvers-", suffix=".txt", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(
+        prefix="reconx-resolvers-",
+        suffix=".txt",
+        dir=str(resolvers_path.parent),
+        delete=False,
+    ) as tmp:
         tmp_path = Path(tmp.name)
     try:
         targets_url = os.getenv("RECONX_DNSVALIDATOR_TARGETS_URL", "https://public-dns.info/nameservers.txt")
@@ -228,7 +234,6 @@ def _refresh_resolvers_with_dnsvalidator(
         if not lines:
             print("⚠️  dnsvalidator не вернул валидные resolvers, оставляю текущий файл.", file=sys.stderr)
             return
-        resolvers_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         os.replace(tmp_path, resolvers_path)
         print(f"✅ Resolvers обновлены: {len(lines)} (dnsvalidator)")
