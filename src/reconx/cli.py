@@ -184,6 +184,7 @@ def _refresh_resolvers_with_dnsvalidator(
         print("⚠️  dnsvalidator не найден, обновление resolvers пропущено.", file=sys.stderr)
         return
     resolvers_path = data_dir / "resolvers.txt"
+    proc: subprocess.Popen | None = None
     with tempfile.NamedTemporaryFile(prefix="reconx-resolvers-", suffix=".txt", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
@@ -233,6 +234,15 @@ def _refresh_resolvers_with_dnsvalidator(
         print(f"✅ Resolvers обновлены: {len(lines)} (dnsvalidator)")
         if timed_out:
             print("ℹ️  dnsvalidator остановлен по лимиту времени.")
+    except KeyboardInterrupt:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        raise
     except Exception as error:
         print(f"⚠️  Не удалось обновить resolvers: {error}", file=sys.stderr)
     finally:
