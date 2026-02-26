@@ -96,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         metavar="SECONDS",
         default=None,
-        help="Обновить resolvers через dns_validate в течение N секунд (например: -pr 500).",
+        help="Обновить resolvers через dnsvalidator в течение N секунд (например: -pr 500).",
     )
 
     return parser
@@ -165,9 +165,9 @@ def _read_nonempty_lines(path: Path, skip_comments: bool = False) -> list[str]:
     return result
 
 
-def _refresh_resolvers_with_dns_validate(data_dir: Path, seconds: int, dns_validate_bin: str | None) -> None:
-    if not dns_validate_bin:
-        print("⚠️  dns_validate не найден, обновление resolvers пропущено.", file=sys.stderr)
+def _refresh_resolvers_with_dnsvalidator(data_dir: Path, seconds: int, dnsvalidator_bin: str | None) -> None:
+    if not dnsvalidator_bin:
+        print("⚠️  dnsvalidator не найден, обновление resolvers пропущено.", file=sys.stderr)
         return
     resolvers_path = data_dir / "resolvers.txt"
     with tempfile.NamedTemporaryFile(prefix="reconx-resolvers-", suffix=".txt", delete=False) as tmp:
@@ -177,7 +177,7 @@ def _refresh_resolvers_with_dns_validate(data_dir: Path, seconds: int, dns_valid
         threads = max(20, min(120, (os.cpu_count() or 4) * 8))
         per_request_timeout = max(4, min(20, max(1, seconds // 20)))
         cmd = [
-            dns_validate_bin,
+            dnsvalidator_bin,
             "-tL",
             targets_url,
             "-threads",
@@ -421,8 +421,8 @@ def _run_init(args: argparse.Namespace) -> int:
             print(f"📁 bin: {bin_dir}")
 
         if args.parse_resolve:
-            dns_validate_bin = str(binaries.get("dns_validate")) if binaries.get("dns_validate") else shutil.which("dns_validate")
-            _refresh_resolvers_with_dns_validate(data_dir, args.parse_resolve, dns_validate_bin)
+            dnsvalidator_bin = str(binaries.get("dnsvalidator")) if binaries.get("dnsvalidator") else shutil.which("dnsvalidator")
+            _refresh_resolvers_with_dnsvalidator(data_dir, args.parse_resolve, dnsvalidator_bin)
 
         targets: list[Target] = load_targets(
             list_path=args.list_path,

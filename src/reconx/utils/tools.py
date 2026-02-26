@@ -34,7 +34,7 @@ SUPPORTED_PLATFORMS = {
 
 # (binary_name, "owner/repo") — бинарники загружаются с GitHub Releases
 PREBUILT_TOOLS = [
-    # dns_validate ставится отдельно через vortexau/dnsvalidator (см. _install_dns_validate).
+    # dnsvalidator ставится отдельно через vortexau/dnsvalidator (см. _install_dnsvalidator).
     ("subfinder", "projectdiscovery/subfinder"),
     ("shuffledns", "projectdiscovery/shuffledns"),
     ("naabu", "projectdiscovery/naabu"),
@@ -48,7 +48,7 @@ PREBUILT_TOOLS = [
 ]
 
 EXPECTED_TOOLS = {
-    "dns_validate",
+    "dnsvalidator",
     "subfinder",
     "shuffledns",
     "massdns",
@@ -349,9 +349,9 @@ def _build_massdns(bin_path: Path) -> Path:
         return dest
 
 
-def _write_dns_validate_wrapper(target: Path, dnsvalidator_bin: Path) -> Path | None:
+def _write_dnsvalidator_wrapper(target: Path, dnsvalidator_bin: Path) -> Path | None:
     """
-    Создаёт wrapper `dns_validate`, который прозрачно проксирует вызов в dnsvalidator.
+    Создаёт wrapper `dnsvalidator`, который прозрачно проксирует вызов в dnsvalidator.
     """
     script = (
         "#!/bin/sh\n"
@@ -366,22 +366,22 @@ def _write_dns_validate_wrapper(target: Path, dnsvalidator_bin: Path) -> Path | 
     return target
 
 
-def _install_dns_validate(bin_path: Path, warnings: list[str] | None = None) -> Path | None:
+def _install_dnsvalidator(bin_path: Path, warnings: list[str] | None = None) -> Path | None:
     """
-    Устанавливает dns_validate через vortexau/dnsvalidator:
+    Устанавливает dnsvalidator через vortexau/dnsvalidator:
     - если dnsvalidator уже есть в PATH, создаёт wrapper;
     - иначе поднимает локальный venv и ставит dnsvalidator из GitHub.
     """
     warnings = warnings if warnings is not None else []
-    target = bin_path / "dns_validate"
-    if target.exists() and _smoke_check_binary("dns_validate", target):
+    target = bin_path / "dnsvalidator"
+    if target.exists() and _smoke_check_binary("dnsvalidator", target):
         return target
     target.unlink(missing_ok=True)
 
     existing = shutil.which("dnsvalidator")
     if existing:
-        wrapped = _write_dns_validate_wrapper(target, Path(existing))
-        if wrapped and _smoke_check_binary("dns_validate", wrapped):
+        wrapped = _write_dnsvalidator_wrapper(target, Path(existing))
+        if wrapped and _smoke_check_binary("dnsvalidator", wrapped):
             return wrapped
         target.unlink(missing_ok=True)
 
@@ -420,26 +420,26 @@ def _install_dns_validate(bin_path: Path, warnings: list[str] | None = None) -> 
             timeout=600,
         )
     except subprocess.TimeoutExpired:
-        warnings.append("dns_validate: timeout установки dnsvalidator (vortexau/dnsvalidator)")
+        warnings.append("dnsvalidator: timeout установки dnsvalidator (vortexau/dnsvalidator)")
         return None
     except subprocess.CalledProcessError as error:
         raise_on_interrupt_returncode(error.returncode)
-        warnings.append("dns_validate: не удалось установить dnsvalidator (vortexau/dnsvalidator)")
+        warnings.append("dnsvalidator: не удалось установить dnsvalidator (vortexau/dnsvalidator)")
         return None
     except Exception:
-        warnings.append("dns_validate: непредвиденная ошибка установки dnsvalidator")
+        warnings.append("dnsvalidator: непредвиденная ошибка установки dnsvalidator")
         return None
 
     if not venv_dnsvalidator.exists():
-        warnings.append("dns_validate: dnsvalidator установлен, но бинарь не найден")
+        warnings.append("dnsvalidator: dnsvalidator установлен, но бинарь не найден")
         return None
 
-    wrapped = _write_dns_validate_wrapper(target, venv_dnsvalidator)
-    if wrapped and _smoke_check_binary("dns_validate", wrapped):
+    wrapped = _write_dnsvalidator_wrapper(target, venv_dnsvalidator)
+    if wrapped and _smoke_check_binary("dnsvalidator", wrapped):
         return wrapped
     if wrapped:
         target.unlink(missing_ok=True)
-    warnings.append("dns_validate: wrapper создан, но smoke-check не пройден")
+    warnings.append("dnsvalidator: wrapper создан, но smoke-check не пройден")
     return None
 
 
@@ -500,7 +500,7 @@ def _download_vulnx_from_releases_page(bin_path: Path, platform_os: str, arch: s
 
 def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, Path], Iterable[str], Iterable[str]]:
     """
-    Гарантировать наличие бинарей: dns_validate, subfinder, shuffledns, massdns,
+    Гарантировать наличие бинарей: dnsvalidator, subfinder, shuffledns, massdns,
     smap, naabu, httpx, dnsx, nuclei, vulnx, katana, gau.
     Сначала скачивает готовые бинари с GitHub Releases (без Go).
     Если не найден — пробует go install. massdns собирается из исходников.
@@ -597,14 +597,20 @@ def ensure_external_tools(bin_dir: Path | None = None) -> Tuple[Path, Dict[str, 
     lock_path = bin_path.parent / ".install.lock"
     try:
         with _install_lock(lock_path):
-            dns_validate_cached = bin_path / "dns_validate"
-            if dns_validate_cached.exists() and _smoke_check_binary("dns_validate", dns_validate_cached):
-                found["dns_validate"] = dns_validate_cached
+            dnsvalidator_cached = bin_path / "dnsvalidator"
+            legacy_dns_validate = bin_path / "dns_validate"
+            if not dnsvalidator_cached.exists() and legacy_dns_validate.exists():
+                try:
+                    os.replace(legacy_dns_validate, dnsvalidator_cached)
+                except Exception:
+                    pass
+            if dnsvalidator_cached.exists() and _smoke_check_binary("dnsvalidator", dnsvalidator_cached):
+                found["dnsvalidator"] = dnsvalidator_cached
             else:
-                dns_validate_cached.unlink(missing_ok=True)
-                installed_dns_validate = _install_dns_validate(bin_path, warnings=warnings)
-                if installed_dns_validate and _smoke_check_binary("dns_validate", installed_dns_validate):
-                    found["dns_validate"] = installed_dns_validate
+                dnsvalidator_cached.unlink(missing_ok=True)
+                installed_dnsvalidator = _install_dnsvalidator(bin_path, warnings=warnings)
+                if installed_dnsvalidator and _smoke_check_binary("dnsvalidator", installed_dnsvalidator):
+                    found["dnsvalidator"] = installed_dnsvalidator
 
             massdns_cached = bin_path / "massdns"
             if massdns_cached.exists() and _smoke_check_binary("massdns", massdns_cached):
