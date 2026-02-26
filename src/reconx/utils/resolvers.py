@@ -91,11 +91,12 @@ def _build_query(domain: str, txid: int) -> bytes:
     return header + qname + struct.pack("!HH", 1, 1)
 
 
-def _query_once(resolver_ip: str, domain: str, timeout_sec: float = 1.3) -> tuple[int, int] | None:
+def _query_once(resolver_ip: str, domain: str, timeout_sec: float = 1.3) -> tuple[int, int, float] | None:
     txid = random.randint(0, 65535)
     packet = _build_query(domain, txid)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout_sec)
+    started = time.monotonic()
     try:
         sock.sendto(packet, (resolver_ip, 53))
         data, _ = sock.recvfrom(1024)
@@ -115,30 +116,35 @@ def _query_once(resolver_ip: str, domain: str, timeout_sec: float = 1.3) -> tupl
     if (flags & 0x8000) == 0:
         return None
     rcode = flags & 0x000F
-    return rcode, answer_count
+    rtt_ms = (time.monotonic() - started) * 1000.0
+    return rcode, answer_count, rtt_ms
 
 
-def _probe_resolver(resolver_ip: str) -> bool:
+def _probe_resolver(resolver_ip: str, max_rtt_ms: int) -> float | None:
     q1 = _query_once(resolver_ip, "example.com")
     if not q1:
-        return False
-    rcode1, answers1 = q1
+        return None
+    rcode1, answers1, rtt1 = q1
     if rcode1 != 0 or answers1 <= 0:
-        return False
+        return None
+    if rtt1 > max_rtt_ms:
+        return None
 
     rand_label = "".join(random.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(10))
     q2 = _query_once(resolver_ip, f"{rand_label}.example.com")
     if not q2:
-        return False
-    rcode2, answers2 = q2
+        return None
+    rcode2, answers2, rtt2 = q2
+    if rtt2 > max_rtt_ms:
+        return None
 
     if rcode2 == 3:
-        return True
+        return (rtt1 + rtt2) / 2.0
     if rcode2 == 0 and answers2 == 0:
-        return True
+        return (rtt1 + rtt2) / 2.0
     if rcode2 == 2:  # SERVFAIL на NXDOMAIN-проверке тоже приемлем для рекурсоров в некоторых сетях
-        return True
-    return False
+        return (rtt1 + rtt2) / 2.0
+    return None
 
 
 def validate_resolvers_fast(
@@ -146,13 +152,14 @@ def validate_resolvers_fast(
     duration_sec: int,
     workers: int = 256,
     max_valid: int = 5000,
+    max_rtt_ms: int = 350,
 ) -> list[str]:
     if not candidates or duration_sec <= 0:
         return []
 
     workers = max(32, min(512, workers))
     deadline = time.monotonic() + max(1, duration_sec)
-    valid: set[str] = set()
+    valid_rtt: dict[str, float] = {}
     idx = 0
     futures: dict = {}
 
@@ -164,7 +171,7 @@ def validate_resolvers_fast(
             return False
         ip = candidates[idx]
         idx += 1
-        futures[executor.submit(_probe_resolver, ip)] = ip
+        futures[executor.submit(_probe_resolver, ip, max_rtt_ms)] = ip
         return True
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -174,7 +181,7 @@ def validate_resolvers_fast(
                 break
 
         while futures and time.monotonic() < deadline:
-            if len(valid) >= max_valid:
+            if len(valid_rtt) >= max_valid:
                 break
             timeout = max(0.05, min(0.5, deadline - time.monotonic()))
             done, _ = wait(list(futures.keys()), timeout=timeout, return_when=FIRST_COMPLETED)
@@ -185,11 +192,14 @@ def validate_resolvers_fast(
                 if not ip:
                     continue
                 try:
-                    if fut.result():
-                        valid.add(ip)
+                    rtt = fut.result()
+                    if rtt is not None:
+                        prev = valid_rtt.get(ip)
+                        if prev is None or rtt < prev:
+                            valid_rtt[ip] = rtt
                 except Exception:
                     pass
                 _submit(executor)
 
-    return sorted(valid)
-
+    ranked = sorted(valid_rtt.items(), key=lambda item: (item[1], item[0]))
+    return [ip for ip, _ in ranked[:max_valid]]

@@ -106,15 +106,15 @@ reconx -l targets.txt --list-id custom01
 # Подробный лог (nmap, таймауты и т.д.)
 reconx example.com --debug
 
-# Обновить resolvers через dnsvalidator в течение 500 секунд
+# Обновить resolvers только быстрыми DNS в течение 500 секунд
 reconx -pr 500
 
 # Обновить resolvers и сразу запустить enum/scan
 reconx -pr 500 example.com
 ```
 
-`-pr/--parse-resolve N` запускает `dnsvalidator` (внутри это `vortexau/dnsvalidator`) на `N` секунд и затем дополняет результат встроенным быстрым UDP-валидатором в оставшееся время. Итоговый список сохраняется в `~/.local/share/reconx/resolvers.txt` (или `RECONX_DATA_DIR/resolvers.txt`).
-По умолчанию источник кандидатов: `https://public-dns.info/nameservers.txt`, его можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`.
+`-pr/--parse-resolve N` в течение `N` секунд собирает кандидатов из публичных списков и оставляет только быстрые резолверы по встроенной UDP-проверке (с ограничением RTT). Итоговый список сохраняется в `~/.local/share/reconx/resolvers.txt` (или `RECONX_DATA_DIR/resolvers.txt`).
+По умолчанию источник кандидатов: `https://public-dns.info/nameservers.txt`, его можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`. Порог скорости можно задать через `RECONX_FAST_RESOLVER_MAX_RTT_MS` (по умолчанию `350`).
 
 ## Конфигурация
 

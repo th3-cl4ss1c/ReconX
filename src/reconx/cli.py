@@ -97,7 +97,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         metavar="SECONDS",
         default=None,
-        help="Обновить resolvers через dnsvalidator в течение N секунд (например: -pr 500).",
+        help="Обновить resolvers только быстрым UDP-валидатором в течение N секунд (например: -pr 500).",
     )
 
     return parser
@@ -166,89 +166,36 @@ def _read_nonempty_lines(path: Path, skip_comments: bool = False) -> list[str]:
     return result
 
 
-def _refresh_resolvers_with_dnsvalidator(data_dir: Path, seconds: int, dnsvalidator_bin: str | None) -> None:
-    if not dnsvalidator_bin:
-        print("⚠️  dnsvalidator не найден, обновление resolvers пропущено.", file=sys.stderr)
-        return
+def _refresh_resolvers_fast_only(data_dir: Path, seconds: int) -> None:
     resolvers_path = data_dir / "resolvers.txt"
     existing = normalize_resolvers(_read_nonempty_lines(resolvers_path))
-    overall_started = time.monotonic()
     with tempfile.NamedTemporaryFile(prefix="reconx-resolvers-", suffix=".txt", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
+        started = time.monotonic()
         targets_url = os.getenv("RECONX_DNSVALIDATOR_TARGETS_URL", "https://public-dns.info/nameservers.txt")
-        dnsvalidator_threads = max(20, min(120, (os.cpu_count() or 4) * 8))
-        per_request_timeout = max(4, min(20, max(1, seconds // 20)))
-        dnsvalidator_budget = max(5, int(seconds * 0.6))
-        dnsvalidator_budget = min(dnsvalidator_budget, seconds)
-        cmd = [
-            dnsvalidator_bin,
-            "-tL",
-            targets_url,
-            "-threads",
-            str(dnsvalidator_threads),
-            "-timeout",
-            str(per_request_timeout),
-            "--silent",
-            "--no-color",
-            "-o",
-            str(tmp_path),
-        ]
-        print(f"🧩 Обновляю resolvers через dnsvalidator ({seconds}s, budget={dnsvalidator_budget}s)...")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        max_rtt_ms = max(80, min(1200, int(os.getenv("RECONX_FAST_RESOLVER_MAX_RTT_MS", "350"))))
+        workers = max(128, min(512, (os.cpu_count() or 4) * 64))
+        print(f"🧩 Обновляю resolvers быстрым валидатором ({seconds}s, workers={workers}, max_rtt={max_rtt_ms}ms)...")
+
+        candidates = collect_resolver_candidates(primary_source=targets_url, max_candidates=20000)
+        elapsed_collect = int(time.monotonic() - started)
+        budget = max(1, seconds - elapsed_collect)
+        fast_lines = validate_resolvers_fast(
+            candidates,
+            duration_sec=budget,
+            workers=workers,
+            max_valid=5000,
+            max_rtt_ms=max_rtt_ms,
         )
 
-        deadline = time.monotonic() + dnsvalidator_budget
-        while proc.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.25)
-
-        timed_out = False
-        if proc.poll() is None:
-            timed_out = True
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-
-        if not timed_out and proc.returncode is not None:
-            raise_on_interrupt_returncode(proc.returncode)
-            if proc.returncode != 0:
-                print(f"⚠️  dnsvalidator завершился с ошибкой (код {proc.returncode})", file=sys.stderr)
-
-        dnsvalidator_lines = normalize_resolvers(tmp_path.read_text(encoding="utf-8").splitlines())
-
-        elapsed = int(time.monotonic() - overall_started)
-        fallback_budget = max(0, seconds - elapsed)
-        fallback_lines: list[str] = []
-        if fallback_budget >= 3:
-            workers = max(128, min(512, (os.cpu_count() or 4) * 64))
-            print(f"🧪 Дополняю быстрым валидатором ({fallback_budget}s, workers={workers})...")
-            candidates = collect_resolver_candidates(primary_source=targets_url, max_candidates=20000)
-            fallback_lines = validate_resolvers_fast(
-                candidates,
-                duration_sec=fallback_budget,
-                workers=workers,
-                max_valid=5000,
-            )
-
-        merged = sorted(set(existing) | set(dnsvalidator_lines) | set(fallback_lines))
-        if not merged:
-            print("⚠️  Не удалось получить валидные resolvers, оставляю текущий файл.", file=sys.stderr)
+        if not fast_lines:
+            print("⚠️  Быстрые resolvers не найдены, оставляю текущий файл.", file=sys.stderr)
             return
         resolvers_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.write_text("\n".join(merged) + ("\n" if merged else ""), encoding="utf-8")
+        tmp_path.write_text("\n".join(fast_lines) + ("\n" if fast_lines else ""), encoding="utf-8")
         os.replace(tmp_path, resolvers_path)
-        print(
-            f"✅ Resolvers обновлены: {len(merged)} "
-            f"(dnsvalidator={len(dnsvalidator_lines)}, fast={len(fallback_lines)}, was={len(existing)})"
-        )
-        if timed_out:
-            print("ℹ️  dnsvalidator остановлен по лимиту времени.")
+        print(f"✅ Resolvers обновлены: {len(fast_lines)} (быстрые, было={len(existing)})")
     except Exception as error:
         print(f"⚠️  Не удалось обновить resolvers: {error}", file=sys.stderr)
     finally:
@@ -445,8 +392,7 @@ def _run_init(args: argparse.Namespace) -> int:
             print(f"📁 bin: {bin_dir}")
 
         if args.parse_resolve:
-            dnsvalidator_bin = str(binaries.get("dnsvalidator")) if binaries.get("dnsvalidator") else shutil.which("dnsvalidator")
-            _refresh_resolvers_with_dnsvalidator(data_dir, args.parse_resolve, dnsvalidator_bin)
+            _refresh_resolvers_fast_only(data_dir, args.parse_resolve)
 
         targets: list[Target] = load_targets(
             list_path=args.list_path,
