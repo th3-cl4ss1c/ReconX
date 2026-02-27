@@ -538,16 +538,73 @@ def load_projectdiscovery_api_key() -> str | None:
     """
     Загружает API-ключ ProjectDiscovery (для vulnx) из:
     1) ENV PROJECTDISCOVERY_API_KEY
+       (также поддерживается алиас PDCP_API_KEY)
     2) Bitwarden item/field (по умолчанию: projectdiscovery/password)
-    3) provider-config.yaml (ключ: projectdiscovery)
+       + алиасы project-discovery/project discovery/pdcp
+    3) provider-config.yaml (projectdiscovery/project_discovery/...)
     """
-    return _load_api_key(
-        env_var="PROJECTDISCOVERY_API_KEY",
-        config_key="projectdiscovery",
-        bw_item_env_var="RECONX_BW_PROJECTDISCOVERY_ITEM",
-        bw_field_env_var="RECONX_BW_PROJECTDISCOVERY_FIELD",
-        bw_default_item="projectdiscovery",
+    # 1) ENV
+    env_key = _value_to_string(os.getenv("PROJECTDISCOVERY_API_KEY")) or _value_to_string(os.getenv("PDCP_API_KEY"))
+    if env_key:
+        os.environ["PROJECTDISCOVERY_API_KEY"] = env_key
+        os.environ["PDCP_API_KEY"] = env_key
+        return env_key
+
+    config = _load_provider_config()
+
+    # 2) BW (поддерживаем несколько имён item и алиасы ключей в config)
+    bw_item = (
+        _value_to_string(os.getenv("RECONX_BW_PROJECTDISCOVERY_ITEM"))
+        or _value_to_string(config.get("projectdiscovery_bw_item"))
+        or _value_to_string(config.get("project_discovery_bw_item"))
+        or _value_to_string(config.get("pdcp_bw_item"))
     )
+    bw_field = (
+        _value_to_string(os.getenv("RECONX_BW_PROJECTDISCOVERY_FIELD"))
+        or _value_to_string(config.get("projectdiscovery_bw_field"))
+        or _value_to_string(config.get("project_discovery_bw_field"))
+        or _value_to_string(config.get("pdcp_bw_field"))
+        or "password"
+    )
+
+    item_candidates: list[str] = []
+    for candidate in (
+        bw_item,
+        "projectdiscovery",
+        "project-discovery",
+        "project discovery",
+        "pdcp",
+    ):
+        name = _value_to_string(candidate)
+        if name and name not in item_candidates:
+            item_candidates.append(name)
+
+    for item_name in item_candidates:
+        warned_before = (_BW_TIMEOUT_WARNED, _BW_ERROR_WARNED, _BW_AUTH_WARNED)
+        key = _load_api_key_from_bw(item_name, field=bw_field)
+        if key:
+            os.environ["PROJECTDISCOVERY_API_KEY"] = key
+            os.environ["PDCP_API_KEY"] = key
+            return key
+        warned_after = (_BW_TIMEOUT_WARNED, _BW_ERROR_WARNED, _BW_AUTH_WARNED)
+        # Если bw явно недоступен/неавторизован, не делаем лишние попытки по алиасам item.
+        if warned_after != warned_before and any(warned_after):
+            break
+
+    # 3) YAML fallback
+    for cfg_key in (
+        "projectdiscovery",
+        "project_discovery",
+        "projectdiscovery_api_key",
+        "project_discovery_api_key",
+        "pdcp_api_key",
+    ):
+        key = _value_to_string(config.get(cfg_key))
+        if key:
+            os.environ["PROJECTDISCOVERY_API_KEY"] = key
+            os.environ["PDCP_API_KEY"] = key
+            return key
+    return None
 
 
 def run_snusbase(domain: str, out_path: Path) -> None:

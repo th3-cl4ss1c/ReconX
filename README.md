@@ -142,6 +142,9 @@ export RECONX_VULNX_TIMEOUT=120
 
 # Лимит rate-limit событий до остановки (по умолчанию 20)
 export RECONX_VULNX_MAX_RATE_EVENTS=40
+
+# Подробный лог по каждому событию rate-limit (по умолчанию тихий режим)
+export RECONX_VULNX_RATE_VERBOSE=1
 ```
 
 ## Конфигурация
@@ -158,9 +161,12 @@ export RECONX_VULNX_MAX_RATE_EVENTS=40
 export HUNTER_API_KEY="..."
 export SNUSBASE_API_KEY="..."
 export PROJECTDISCOVERY_API_KEY="..."
+# Алиас для vulnx тоже поддерживается:
+export PDCP_API_KEY="..."
 ```
 
 Для `vulnx` ключ из `PROJECTDISCOVERY_API_KEY` автоматически прокидывается в `PDCP_API_KEY`.
+Обратный путь тоже работает: если задан только `PDCP_API_KEY`, ReconX использует его как `PROJECTDISCOVERY_API_KEY`.
 
 ### Вариант 2: Bitwarden CLI (рекомендуется)
 
@@ -179,6 +185,12 @@ export RECONX_BW_SNUSBASE_FIELD="password"    # или custom:FIELD
 export RECONX_BW_PROJECTDISCOVERY_ITEM="my/projectdiscovery-item"
 export RECONX_BW_PROJECTDISCOVERY_FIELD="password"  # или custom:FIELD
 ```
+
+Дополнительно поддерживаются BW item-алиасы по умолчанию:
+- `projectdiscovery`
+- `project-discovery`
+- `project discovery`
+- `pdcp`
 
 Если `BW_SESSION` не задан, ReconX в интерактивном TTY предложит скрыто ввести готовый ключ `BW_SESSION` (Enter — пропустить).
 Если вставка в скрытый prompt не сработала, ReconX автоматически предложит второй (видимый) prompt.
@@ -210,6 +222,8 @@ cp provider-config.yaml.example ~/.config/reconx/provider-config.yaml
 hunter_io: [your_hunter_api_key]
 snusbase: [your_snusbase_api_key]
 projectdiscovery: [your_projectdiscovery_api_key]
+# Допустимые алиасы ключа:
+# project_discovery / projectdiscovery_api_key / project_discovery_api_key / pdcp_api_key
 # Опционально: явные ссылки на Bitwarden item/field
 hunter_io_bw_item: hunter
 hunter_io_bw_field: password
@@ -217,6 +231,9 @@ snusbase_bw_item: snusbase
 snusbase_bw_field: password
 projectdiscovery_bw_item: projectdiscovery
 projectdiscovery_bw_field: password
+# Алиасы BW-ссылок:
+# project_discovery_bw_item / pdcp_bw_item
+# project_discovery_bw_field / pdcp_bw_field
 ```
 
 ## Данные

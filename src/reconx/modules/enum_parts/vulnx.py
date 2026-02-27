@@ -40,6 +40,13 @@ def _env_float(name: str, default: float) -> float:
     return value if value >= 0 else default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on", "y"}
+
+
 def _extract_cves_from_text(text: str) -> set[str]:
     return {match.group(0).upper() for match in _CVE_RE.finditer(text or "")}
 
@@ -190,6 +197,9 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
         print("🔐 ProjectDiscovery API key загружен (ENV/Bitwarden/provider-config).")
     else:
         print("⚠️  ProjectDiscovery API key не найден (ENV/Bitwarden/provider-config), продолжаю без ключа.")
+        # Без ключа API лимиты заметно ниже: переключаемся в более щадящий режим.
+        batch_size = min(batch_size, 6)
+        delay_seconds = max(delay_seconds, 1.2)
 
     records_by_cve: dict[str, dict] = {}
     failed_batches = 0
@@ -200,6 +210,8 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
     requests_attempted = 0
     requests_rate_limited = 0
     max_rate_limit_events = _env_int("RECONX_VULNX_MAX_RATE_EVENTS", 20)
+    rate_verbose = _env_bool("RECONX_VULNX_RATE_VERBOSE", False)
+    rate_notice_printed = False
 
     while pending:
         chunk = pending.popleft()
@@ -243,6 +255,9 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
             failed_batches += 1
             if any(marker in combined for marker in _RATE_LIMIT_MARKERS):
                 requests_rate_limited += 1
+                if not rate_notice_printed:
+                    print("⚠️  vulnx упёрся в rate-limit, перехожу в адаптивный режим (подробности скрыты).")
+                    rate_notice_printed = True
                 if requests_rate_limited > max_rate_limit_events:
                     stopped_by_rate_limit = True
                     stopped_on_batch_size = batch_len
@@ -256,11 +271,14 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
                     split_chunks = [chunk[idx : idx + split_size] for idx in range(0, batch_len, split_size)]
                     for subchunk in reversed(split_chunks):
                         pending.appendleft(subchunk)
-                    print(
-                        f"⚠️  vulnx rate-limit на запросе #{batch_no}; "
-                        f"дроблю batch {batch_len} -> {split_size}."
-                    )
-                    time.sleep(max(delay_seconds, 1.0))
+                    if rate_verbose:
+                        print(
+                            f"⚠️  vulnx rate-limit на запросе #{batch_no}; "
+                            f"дроблю batch {batch_len} -> {split_size}."
+                        )
+                    # Мягкий экспоненциальный backoff.
+                    backoff_seconds = min(8.0, 1.0 * (2 ** min(requests_rate_limited - 1, 3)))
+                    time.sleep(max(delay_seconds, backoff_seconds))
                     continue
                 stopped_by_rate_limit = True
                 stopped_on_batch_size = batch_len
@@ -318,3 +336,8 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
         f"vulnx: input={len(cves)}, resolved={len(sorted_cves)}, missing={len(missing)}, "
         f"requests={requests_attempted}, failed={failed_batches}"
     )
+    if requests_rate_limited and not rate_verbose:
+        print(
+            f"ℹ️  vulnx rate-limit events: {requests_rate_limited} "
+            f"(для подробностей: RECONX_VULNX_RATE_VERBOSE=1)"
+        )
