@@ -4,9 +4,12 @@
 
 hunter_io: [your_hunter_api_key]
 snusbase: [your_snusbase_api_key]
+projectdiscovery: [your_projectdiscovery_api_key]
 
 # Опционально: откуда брать ключи через Bitwarden
 hunter_io_bw_item: hunter
 hunter_io_bw_field: password
 snusbase_bw_item: snusbase
 snusbase_bw_field: password
+projectdiscovery_bw_item: projectdiscovery
+projectdiscovery_bw_field: password

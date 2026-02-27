@@ -534,6 +534,22 @@ def run_hunter(domain: str, out_path: Path) -> None:
         print("⚠️  hunter.io ошибка")
 
 
+def load_projectdiscovery_api_key() -> str | None:
+    """
+    Загружает API-ключ ProjectDiscovery (для vulnx) из:
+    1) ENV PROJECTDISCOVERY_API_KEY
+    2) Bitwarden item/field (по умолчанию: projectdiscovery/password)
+    3) provider-config.yaml (ключ: projectdiscovery)
+    """
+    return _load_api_key(
+        env_var="PROJECTDISCOVERY_API_KEY",
+        config_key="projectdiscovery",
+        bw_item_env_var="RECONX_BW_PROJECTDISCOVERY_ITEM",
+        bw_field_env_var="RECONX_BW_PROJECTDISCOVERY_FIELD",
+        bw_default_item="projectdiscovery",
+    )
+
+
 def run_snusbase(domain: str, out_path: Path) -> None:
     api_key = _load_api_key(
         env_var="SNUSBASE_API_KEY",

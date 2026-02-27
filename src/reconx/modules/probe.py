@@ -10,6 +10,7 @@ from typing import Iterable, List, Set
 import ipaddress
 
 from reconx.modules.base import Module
+from reconx.modules.enum_parts.vulnx import run_vulnx_scan
 from reconx.utils.targets import Target
 from reconx.utils.process import raise_on_interrupt_returncode
 
@@ -33,6 +34,7 @@ class ProbeModule(Module):
         self.smap_bin = shutil.which("smap")
         self.naabu_bin = shutil.which("naabu")
         self.nmap_bin = shutil.which("nmap")
+        self.vulnx_bin = shutil.which("vulnx")
         self.nuclei_profile = nuclei_profile
         self.single_mode = single_mode
         self.debug = debug
@@ -100,6 +102,8 @@ class ProbeModule(Module):
         open_ports_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         if self.aggression == 3:
             print(f"cve: {cve_count}")
+
+        run_vulnx_scan(raw_scan, self.vulnx_bin)
 
         # httpx: host:port (если есть open-ports), иначе alive.txt
         httpx_input = [ln.strip() for ln in open_ports_path.read_text(encoding="utf-8").splitlines() if ln.strip()]

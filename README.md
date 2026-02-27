@@ -1,6 +1,6 @@
 # ReconX
 
-Модульный CLI-инструмент для подготовки и запуска разведки с единообразной структурой артефактов. Создаёт стандартное дерево директорий для целей (доменов и IP), запускает subfinder, shuffledns, dnsx, smap, naabu, nmap, httpx, nuclei и связанные утилиты.
+Модульный CLI-инструмент для подготовки и запуска разведки с единообразной структурой артефактов. Создаёт стандартное дерево директорий для целей (доменов и IP), запускает subfinder, shuffledns, dnsx, smap, naabu, nmap, httpx, nuclei и связанные утилиты, а также обогащает найденные CVE через `vulnx`.
 
 ## Установка (pipx)
 
@@ -121,11 +121,34 @@ reconx -pr 500 -prt 100 example.com
 Число потоков по умолчанию: `20`, изменить можно через `-prt/--parse-resolve-threads`.
 Источник кандидатов можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`.
 
+`vulnx` запускается автоматически после формирования scan-артефактов (`raw/scan/smap.json`, `nmap*`, `nuclei-net.json`) и работает по dedupe-списку CVE.
+Результаты сохраняются в:
+- `raw/scan/vulnx-input-cves.txt`
+- `raw/scan/vulnx.jsonl`
+- `raw/scan/vulnx-missing-cves.txt`
+- `raw/scan/vulnx-summary.json`
+
+Тонкая настройка под лимиты ProjectDiscovery:
+
+```bash
+# Размер батча CVE (по умолчанию 50)
+export RECONX_VULNX_BATCH_SIZE=30
+
+# Пауза между батчами в секундах (по умолчанию 0.8)
+export RECONX_VULNX_BATCH_DELAY=1.2
+
+# Таймаут одного вызова vulnx (по умолчанию 90)
+export RECONX_VULNX_TIMEOUT=120
+
+# Лимит rate-limit событий до остановки (по умолчанию 20)
+export RECONX_VULNX_MAX_RATE_EVENTS=40
+```
+
 ## Конфигурация
 
 Основной приоритет источников ключей:
 
-1. `ENV` (`HUNTER_API_KEY`, `SNUSBASE_API_KEY`)
+1. `ENV` (`HUNTER_API_KEY`, `SNUSBASE_API_KEY`, `PROJECTDISCOVERY_API_KEY`)
 2. `Bitwarden CLI` (`bw`)
 3. `provider-config.yaml` (опциональный fallback)
 
@@ -134,13 +157,17 @@ reconx -pr 500 -prt 100 example.com
 ```bash
 export HUNTER_API_KEY="..."
 export SNUSBASE_API_KEY="..."
+export PROJECTDISCOVERY_API_KEY="..."
 ```
+
+Для `vulnx` ключ из `PROJECTDISCOVERY_API_KEY` автоматически прокидывается в `PDCP_API_KEY`.
 
 ### Вариант 2: Bitwarden CLI (рекомендуется)
 
 По умолчанию ReconX ищет items:
 - `hunter` (поле `password`)
 - `snusbase` (поле `password`)
+- `projectdiscovery` (поле `password`)
 
 Переопределить item/поле можно через ENV:
 
@@ -149,6 +176,8 @@ export RECONX_BW_HUNTER_ITEM="my/hunter-item"
 export RECONX_BW_HUNTER_FIELD="password"      # или custom:FIELD
 export RECONX_BW_SNUSBASE_ITEM="my/snus-item"
 export RECONX_BW_SNUSBASE_FIELD="password"    # или custom:FIELD
+export RECONX_BW_PROJECTDISCOVERY_ITEM="my/projectdiscovery-item"
+export RECONX_BW_PROJECTDISCOVERY_FIELD="password"  # или custom:FIELD
 ```
 
 Если `BW_SESSION` не задан, ReconX в интерактивном TTY предложит скрыто ввести готовый ключ `BW_SESSION` (Enter — пропустить).
@@ -180,11 +209,14 @@ cp provider-config.yaml.example ~/.config/reconx/provider-config.yaml
 ```yaml
 hunter_io: [your_hunter_api_key]
 snusbase: [your_snusbase_api_key]
+projectdiscovery: [your_projectdiscovery_api_key]
 # Опционально: явные ссылки на Bitwarden item/field
 hunter_io_bw_item: hunter
 hunter_io_bw_field: password
 snusbase_bw_item: snusbase
 snusbase_bw_field: password
+projectdiscovery_bw_item: projectdiscovery
+projectdiscovery_bw_field: password
 ```
 
 ## Данные

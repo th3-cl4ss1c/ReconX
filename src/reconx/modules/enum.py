@@ -21,6 +21,7 @@ from reconx.modules.enum_parts import (
     run_smap_hosts,
     run_snusbase,
     run_subfinder,
+    run_vulnx_scan,
     shuffledns_bruteforce,
 )
 from reconx.utils.data import WORDLIST_NAME, get_data_dir
@@ -50,6 +51,7 @@ class EnumModule(Module):
         self.wordlist = str(Path(wordlist) if wordlist else default_wordlist)
         self.shuffledns_bin = shutil.which("shuffledns")
         self.massdns_bin = shutil.which("massdns")
+        self.vulnx_bin = shutil.which("vulnx")
         self.aggression = aggression
         self.nuclei_profile = nuclei_profile
         self.single_mode = single_mode
@@ -118,6 +120,8 @@ class EnumModule(Module):
                 paths.open_ports_path.write_text("\n".join(open_lines) + ("\n" if open_lines else ""), encoding="utf-8")
                 if merged_ports:
                     run_nmap_hosts(host_list, merged_ports, paths.nmap_path, aggression=self.aggression, debug=self.debug)
+
+        run_vulnx_scan(paths.raw_scan_dir, self.vulnx_bin)
 
         paths.subdomains_path.write_text("\n".join(resolved) + ("\n" if resolved else ""), encoding="utf-8")
 
