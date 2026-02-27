@@ -60,17 +60,35 @@ def _ensure_bw_env() -> None:
     """
     Готовим appdata-dir для bw cli (помогает в средах с ограниченной записью в $HOME).
     """
-    if os.getenv("BITWARDENCLI_APPDATA_DIR"):
+    current = _value_to_string(os.getenv("BITWARDENCLI_APPDATA_DIR"))
+    if current:
         return
+
+    def _is_writable_dir(path: Path) -> bool:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / f".reconx-probe-{os.getpid()}"
+            probe.mkdir()
+            probe.rmdir()
+            return True
+        except Exception:
+            return False
+
     default = Path.home() / ".config" / "Bitwarden CLI"
-    try:
-        default.mkdir(parents=True, exist_ok=True)
-        if os.access(default, os.W_OK):
-            return
-    except Exception:
-        pass
+    if _is_writable_dir(default):
+        return
+
     fallback = Path("/tmp") / f"bitwarden-cli-{os.getuid()}"
     fallback.mkdir(parents=True, exist_ok=True)
+    # Если fallback вынужден, стараемся синхронизировать профиль bw,
+    # иначе валидный BW_SESSION может выглядеть как unauthenticated.
+    try:
+        src = default / "data.json"
+        dst = fallback / "data.json"
+        if src.exists() and src.is_file() and os.access(src, os.R_OK):
+            shutil.copy2(src, dst)
+    except Exception:
+        pass
     os.environ["BITWARDENCLI_APPDATA_DIR"] = str(fallback)
 
 
@@ -108,6 +126,12 @@ def _looks_like_bw_auth_error(text: str) -> bool:
     return any(marker in low for marker in markers)
 
 
+def _bw_exec_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["BW_NOINTERACTION"] = "true"
+    return env
+
+
 def _bw_run(
     args: list[str],
     session: str | None = None,
@@ -122,6 +146,7 @@ def _bw_run(
             text=True,
             capture_output=True,
             check=False,
+            env=_bw_exec_env(),
             timeout=timeout,
         )
         raise_on_interrupt_returncode(proc.returncode)
@@ -158,6 +183,7 @@ def _probe_bw_session(session: str, timeout: int = 15) -> str:
             text=True,
             capture_output=True,
             check=False,
+            env=_bw_exec_env(),
             timeout=timeout,
         )
         raise_on_interrupt_returncode(proc.returncode)
