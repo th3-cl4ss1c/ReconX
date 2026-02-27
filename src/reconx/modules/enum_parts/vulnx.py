@@ -180,8 +180,8 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
         print("vulnx: 0 CVE (нет входных CVE)")
         return
 
-    batch_size = _env_int("RECONX_VULNX_BATCH_SIZE", 50)
-    delay_seconds = _env_float("RECONX_VULNX_BATCH_DELAY", 0.8)
+    batch_size = _env_int("RECONX_VULNX_BATCH_SIZE", 5)
+    delay_seconds = _env_float("RECONX_VULNX_BATCH_DELAY", 1.0)
     timeout_seconds = _env_int("RECONX_VULNX_TIMEOUT", 90)
 
     input_cves_path.write_text("\n".join(cves) + "\n", encoding="utf-8")
