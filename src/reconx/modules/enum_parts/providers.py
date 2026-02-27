@@ -165,45 +165,31 @@ def _ensure_bw_session_from_input() -> str | None:
     if not (shutil.which("bw") and os.isatty(0) and os.isatty(1)):
         return None
 
-    attempt = 1
-    while True:
-        hidden_prompt = (
-            "🔑 Введите BW_SESSION (скрытый ввод, Enter=пропустить): "
-            if attempt == 1
-            else "🔁 BW_SESSION не подошёл. Введите другой (скрытый, Enter=пропустить): "
-        )
-        visible_prompt = (
-            "🔑 Вставьте BW_SESSION (видимый ввод, Enter=пропустить): "
-            if attempt == 1
-            else "🔁 Вставьте другой BW_SESSION (видимый ввод, Enter=пропустить): "
-        )
+    hidden_prompt = "🔑 Введите BW_SESSION (скрытый ввод, Enter=пропустить): "
+    visible_prompt = "🔑 Вставьте BW_SESSION (видимый ввод, Enter=пропустить): "
 
+    session = ""
+    try:
+        session = getpass.getpass(hidden_prompt).strip()
+    except KeyboardInterrupt:
+        raise
+    except Exception:
         session = ""
+    if not session:
+        # В некоторых терминалах вставка в скрытый prompt getpass может не срабатывать.
         try:
-            session = getpass.getpass(hidden_prompt).strip()
+            session = input(visible_prompt).strip()
         except KeyboardInterrupt:
             raise
         except Exception:
-            session = ""
-        if not session:
-            # В некоторых терминалах вставка в скрытый prompt getpass может не срабатывать.
-            try:
-                session = input(visible_prompt).strip()
-            except KeyboardInterrupt:
-                raise
-            except Exception:
-                return None
-        if not session:
             return None
+    if not session:
+        return None
 
-        # Лёгкая валидация: пробуем запрос списка с переданной сессией.
-        probe = _bw_run(["list", "items", "--search", "reconx", "--raw"], session=session, timeout=30)
-        if probe is not None and probe.returncode == 0:
-            _BW_SESSION_CACHE = session
-            return session
-
-        print("⚠️  Введённый BW_SESSION не подошёл. Попробуйте другой или Enter для пропуска.")
-        attempt += 1
+    # Принимаем введённую сессию без pre-check:
+    # в ряде окружений probe может ложно падать по timeout, хотя сессия рабочая.
+    _BW_SESSION_CACHE = session
+    return session
 
 
 def _bw_find_item_id(item_name: str, session: str | None = None) -> str | None:
