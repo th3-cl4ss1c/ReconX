@@ -10,7 +10,6 @@ from typing import Iterable, List, Set
 import ipaddress
 
 from reconx.modules.base import Module
-from reconx.modules.enum_parts.providers import load_projectdiscovery_api_key
 from reconx.modules.enum_parts.vulnx import run_vulnx_scan
 from reconx.utils.targets import Target
 from reconx.utils.process import raise_on_interrupt_returncode
@@ -29,6 +28,7 @@ class ProbeModule(Module):
         nuclei_profile: str | None = None,
         single_mode: bool = False,
         debug: bool = False,
+        projectdiscovery_api_key: str | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root)
         self.aggression = aggression
@@ -39,6 +39,7 @@ class ProbeModule(Module):
         self.nuclei_profile = nuclei_profile
         self.single_mode = single_mode
         self.debug = debug
+        self.projectdiscovery_api_key = projectdiscovery_api_key
 
     def run(self, targets: Iterable[Target]) -> Path:
         for target in targets:
@@ -54,7 +55,6 @@ class ProbeModule(Module):
         target_dir = self.workspace_root if self.single_mode else self._unique_target_dir(target.folder_name)
         if self.debug:
             print(f"[debug] probe start: ip={ip}, aggression={self.aggression}, target_dir={target_dir}")
-        projectdiscovery_api_key = load_projectdiscovery_api_key()
         raw_scan = target_dir / "raw" / "scan"
         raw_web = target_dir / "raw" / "web"
         processed_dir = target_dir / "processed"
@@ -105,7 +105,12 @@ class ProbeModule(Module):
         if self.aggression == 3:
             print(f"cve: {cve_count}")
 
-        run_vulnx_scan(raw_scan, self.vulnx_bin, projectdiscovery_api_key=projectdiscovery_api_key)
+        run_vulnx_scan(
+            raw_scan,
+            self.vulnx_bin,
+            projectdiscovery_api_key=self.projectdiscovery_api_key,
+            announce_api_key=False,
+        )
 
         # httpx: host:port (если есть open-ports), иначе alive.txt
         httpx_input = [ln.strip() for ln in open_ports_path.read_text(encoding="utf-8").splitlines() if ln.strip()]

@@ -156,6 +156,7 @@ def run_vulnx_scan(
     raw_scan_dir: Path,
     vulnx_bin: str | None,
     projectdiscovery_api_key: str | None | object = _API_KEY_UNSET,
+    announce_api_key: bool = True,
 ) -> None:
     """
     Обогащает найденные CVE через vulnx и сохраняет результаты в raw/scan.
@@ -202,9 +203,11 @@ def run_vulnx_scan(
         # vulnx ожидает ключ именно в PDCP_API_KEY.
         env["PDCP_API_KEY"] = api_key
         env["PROJECTDISCOVERY_API_KEY"] = api_key
-        print("🔐 ProjectDiscovery API key загружен (ENV/Bitwarden/provider-config).")
+        if announce_api_key:
+            print("🔐 ProjectDiscovery API key загружен (ENV/Bitwarden/provider-config).")
     else:
-        print("⚠️  ProjectDiscovery API key не найден (ENV/Bitwarden/provider-config), продолжаю без ключа.")
+        if announce_api_key:
+            print("⚠️  ProjectDiscovery API key не найден (ENV/Bitwarden/provider-config), продолжаю без ключа.")
         # Без ключа API лимиты заметно ниже: переключаемся в более щадящий режим.
         batch_size = min(batch_size, 6)
         delay_seconds = max(delay_seconds, 1.2)

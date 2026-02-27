@@ -12,6 +12,7 @@ import time
 from reconx import __version__
 from reconx.modules.workspace import WorkspaceModule
 from reconx.modules import EnumModule, ProbeModule
+from reconx.modules.enum_parts.providers import load_projectdiscovery_api_key
 from reconx.utils.process import raise_on_interrupt_returncode
 from reconx.utils.targets import Target, load_targets
 
@@ -426,6 +427,7 @@ def _run_init(args: argparse.Namespace) -> int:
     root_dir: Path | None = None
     active_target_dir: Path | None = None
     completed_runs: list[tuple[Target, Path]] = []
+    projectdiscovery_api_key: str | None = None
 
     try:
         _ensure_data_dir_env()
@@ -443,6 +445,19 @@ def _run_init(args: argparse.Namespace) -> int:
             print(f"\n🔧 Tools: " + ", ".join(sorted(binaries.keys())))
             print(f"📁 bin: {bin_dir}")
 
+        targets: list[Target] = load_targets(
+            list_path=args.list_path,
+            inline_targets=args.targets,
+        )
+
+        if targets and binaries.get("vulnx"):
+            print("🔐 Проверяю ProjectDiscovery API key (ENV/Bitwarden/provider-config)...")
+            projectdiscovery_api_key = load_projectdiscovery_api_key()
+            if projectdiscovery_api_key:
+                print("✅ ProjectDiscovery API key загружен.")
+            else:
+                print("⚠️  ProjectDiscovery API key не найден (ENV/Bitwarden/provider-config), продолжаю без ключа.")
+
         if args.parse_resolve:
             dnsvalidator_bin = str(binaries.get("dnsvalidator")) if binaries.get("dnsvalidator") else shutil.which("dnsvalidator")
             _refresh_resolvers_with_dnsvalidator(
@@ -451,11 +466,6 @@ def _run_init(args: argparse.Namespace) -> int:
                 dnsvalidator_bin,
                 args.parse_resolve_threads,
             )
-
-        targets: list[Target] = load_targets(
-            list_path=args.list_path,
-            inline_targets=args.targets,
-        )
 
         if not targets:
             if args.parse_resolve:
@@ -494,6 +504,7 @@ def _run_init(args: argparse.Namespace) -> int:
                     nuclei_profile=None,
                     single_mode=True,
                     debug=args.debug,
+                    projectdiscovery_api_key=projectdiscovery_api_key,
                 ).run([target])
                 completed_runs.append((target, target_dir))
                 active_target_dir = None
@@ -512,6 +523,7 @@ def _run_init(args: argparse.Namespace) -> int:
                     nuclei_profile=None,
                     single_mode=True,
                     debug=args.debug,
+                    projectdiscovery_api_key=projectdiscovery_api_key,
                 ).run([target])
                 completed_runs.append((target, target_dir))
                 active_target_dir = None
