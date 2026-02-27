@@ -16,6 +16,7 @@ from .providers import load_projectdiscovery_api_key
 _CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
 _RATE_LIMIT_MARKERS = ("rate limit", "too many requests", "429", "quota")
 _AUTH_ERROR_MARKERS = ("invalid api key", "unauthorized", "forbidden")
+_API_KEY_UNSET = object()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -151,7 +152,11 @@ def _extract_cve_id(entry: dict) -> str | None:
     return None
 
 
-def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
+def run_vulnx_scan(
+    raw_scan_dir: Path,
+    vulnx_bin: str | None,
+    projectdiscovery_api_key: str | None | object = _API_KEY_UNSET,
+) -> None:
     """
     Обогащает найденные CVE через vulnx и сохраняет результаты в raw/scan.
     """
@@ -188,7 +193,10 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
     out_jsonl_path.write_text("", encoding="utf-8")
     missing_cves_path.write_text("", encoding="utf-8")
 
-    api_key = load_projectdiscovery_api_key()
+    if projectdiscovery_api_key is _API_KEY_UNSET:
+        api_key = load_projectdiscovery_api_key()
+    else:
+        api_key = str(projectdiscovery_api_key).strip() if projectdiscovery_api_key else None
     env = os.environ.copy()
     if api_key:
         # vulnx ожидает ключ именно в PDCP_API_KEY.
@@ -204,17 +212,18 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
     records_by_cve: dict[str, dict] = {}
     failed_batches = 0
     initial_batches = int(math.ceil(len(cves) / batch_size))
-    pending = deque(cves[index : index + batch_size] for index in range(0, len(cves), batch_size))
-    stopped_by_rate_limit = False
-    stopped_on_batch_size = 0
+    pending = deque((cves[index : index + batch_size], 0) for index in range(0, len(cves), batch_size))
     requests_attempted = 0
     requests_rate_limited = 0
-    max_rate_limit_events = _env_int("RECONX_VULNX_MAX_RATE_EVENTS", 20)
+    single_retry_limit = _env_int("RECONX_VULNX_SINGLE_RETRIES", 3)
+    rate_backoff_max = _env_float("RECONX_VULNX_RATE_BACKOFF_MAX", 12.0)
+    single_retries_used = 0
+    single_retries_exhausted = 0
     rate_verbose = _env_bool("RECONX_VULNX_RATE_VERBOSE", False)
     rate_notice_printed = False
 
     while pending:
-        chunk = pending.popleft()
+        chunk, single_retry_count = pending.popleft()
         requests_attempted += 1
         batch_no = requests_attempted
         batch_len = len(chunk)
@@ -252,38 +261,42 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
         combined = (stderr + "\n" + stdout).strip().lower()
         payload = _decode_vulnx_payload(stdout)
         if proc.returncode != 0 and not payload:
-            failed_batches += 1
             if any(marker in combined for marker in _RATE_LIMIT_MARKERS):
                 requests_rate_limited += 1
                 if not rate_notice_printed:
                     print("⚠️  vulnx упёрся в rate-limit, перехожу в адаптивный режим (подробности скрыты).")
                     rate_notice_printed = True
-                if requests_rate_limited > max_rate_limit_events:
-                    stopped_by_rate_limit = True
-                    stopped_on_batch_size = batch_len
-                    print(
-                        f"⚠️  vulnx rate-limit повторился {requests_rate_limited} раз, "
-                        f"останавливаю обработку (batch={batch_len})."
-                    )
-                    break
                 if batch_len > 1:
                     split_size = max(1, batch_len // 2)
                     split_chunks = [chunk[idx : idx + split_size] for idx in range(0, batch_len, split_size)]
                     for subchunk in reversed(split_chunks):
-                        pending.appendleft(subchunk)
+                        pending.appendleft((subchunk, 0))
                     if rate_verbose:
                         print(
                             f"⚠️  vulnx rate-limit на запросе #{batch_no}; "
                             f"дроблю batch {batch_len} -> {split_size}."
                         )
                     # Мягкий экспоненциальный backoff.
-                    backoff_seconds = min(8.0, 1.0 * (2 ** min(requests_rate_limited - 1, 3)))
+                    backoff_seconds = min(rate_backoff_max, 1.0 * (2 ** min(requests_rate_limited - 1, 4)))
                     time.sleep(max(delay_seconds, backoff_seconds))
                     continue
-                stopped_by_rate_limit = True
-                stopped_on_batch_size = batch_len
-                print("⚠️  vulnx rate-limit даже на batch=1, останавливаю дальнейшие запросы.")
-                break
+                if single_retry_count < single_retry_limit:
+                    next_retry = single_retry_count + 1
+                    single_retries_used += 1
+                    pending.appendleft((chunk, next_retry))
+                    if rate_verbose:
+                        print(f"⚠️  vulnx rate-limit на batch=1, retry {next_retry}/{single_retry_limit}")
+                    backoff_seconds = min(rate_backoff_max, max(delay_seconds, 1.0 * (2 ** min(next_retry, 4))))
+                    time.sleep(backoff_seconds)
+                    continue
+                single_retries_exhausted += 1
+                failed_batches += 1
+                if rate_verbose:
+                    print("⚠️  vulnx rate-limit на batch=1: лимит retries исчерпан, пропускаю CVE")
+                if delay_seconds > 0 and pending:
+                    time.sleep(delay_seconds)
+                continue
+            failed_batches += 1
             if any(marker in combined for marker in _AUTH_ERROR_MARKERS):
                 print(f"⚠️  vulnx auth-ошибка на запросе #{batch_no} (batch={batch_len}, код {proc.returncode})")
             else:
@@ -318,9 +331,10 @@ def run_vulnx_scan(raw_scan_dir: Path, vulnx_bin: str | None) -> None:
         "batches_failed": failed_batches,
         "requests_attempted": requests_attempted,
         "requests_rate_limited": requests_rate_limited,
-        "stopped_by_rate_limit": stopped_by_rate_limit,
-        "stopped_on_batch_size": stopped_on_batch_size,
-        "rate_limit_events_max": max_rate_limit_events,
+        "single_retry_limit": single_retry_limit,
+        "single_retries_used": single_retries_used,
+        "single_retries_exhausted": single_retries_exhausted,
+        "rate_backoff_max_seconds": rate_backoff_max,
         "batch_size": batch_size,
         "delay_seconds": delay_seconds,
         "timeout_seconds": timeout_seconds,

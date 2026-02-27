@@ -122,6 +122,7 @@ reconx -pr 500 -prt 100 example.com
 Источник кандидатов можно переопределить через `RECONX_DNSVALIDATOR_TARGETS_URL`.
 
 `vulnx` запускается автоматически после формирования scan-артефактов (`raw/scan/smap.json`, `nmap*`, `nuclei-net.json`) и работает по dedupe-списку CVE.
+Ключ ProjectDiscovery подгружается заранее на старте обработки цели (через тот же механизм `bw cli`, что и для `snusbase`/`hunter`).
 Результаты сохраняются в:
 - `raw/scan/vulnx-input-cves.txt`
 - `raw/scan/vulnx.jsonl`
@@ -140,8 +141,11 @@ export RECONX_VULNX_BATCH_DELAY=1.2
 # Таймаут одного вызова vulnx (по умолчанию 90)
 export RECONX_VULNX_TIMEOUT=120
 
-# Лимит rate-limit событий до остановки (по умолчанию 20)
-export RECONX_VULNX_MAX_RATE_EVENTS=40
+# Сколько раз повторять batch=1 при rate-limit (по умолчанию 3)
+export RECONX_VULNX_SINGLE_RETRIES=5
+
+# Верхняя граница backoff при rate-limit, секунды (по умолчанию 12)
+export RECONX_VULNX_RATE_BACKOFF_MAX=20
 
 # Подробный лог по каждому событию rate-limit (по умолчанию тихий режим)
 export RECONX_VULNX_RATE_VERBOSE=1

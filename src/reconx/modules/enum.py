@@ -24,6 +24,7 @@ from reconx.modules.enum_parts import (
     run_vulnx_scan,
     shuffledns_bruteforce,
 )
+from reconx.modules.enum_parts.providers import load_projectdiscovery_api_key
 from reconx.utils.data import WORDLIST_NAME, get_data_dir
 from reconx.utils.targets import Target
 
@@ -70,6 +71,7 @@ class EnumModule(Module):
         if self.debug:
             print(f"[debug] enum start: domain={domain}, aggression={self.aggression}, target_dir={target_dir}")
         paths = EnumPaths.create(target_dir)
+        projectdiscovery_api_key = load_projectdiscovery_api_key()
 
         run_snusbase(domain, paths.snusbase_path)
         run_hunter(domain, paths.hunter_path)
@@ -121,7 +123,7 @@ class EnumModule(Module):
                 if merged_ports:
                     run_nmap_hosts(host_list, merged_ports, paths.nmap_path, aggression=self.aggression, debug=self.debug)
 
-        run_vulnx_scan(paths.raw_scan_dir, self.vulnx_bin)
+        run_vulnx_scan(paths.raw_scan_dir, self.vulnx_bin, projectdiscovery_api_key=projectdiscovery_api_key)
 
         paths.subdomains_path.write_text("\n".join(resolved) + ("\n" if resolved else ""), encoding="utf-8")
 
