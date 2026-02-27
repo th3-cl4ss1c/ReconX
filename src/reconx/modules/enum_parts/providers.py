@@ -142,6 +142,37 @@ def _bw_run(
         return None
 
 
+def _probe_bw_session(session: str, timeout: int = 15) -> str:
+    """
+    Быстрая проверка BW_SESSION в интерактивном prompt:
+    - ok: сессия выглядит валидной;
+    - invalid: явная auth/lock ошибка;
+    - timeout: не удалось проверить по времени;
+    - error: прочая ошибка (не считаем явной невалидностью).
+    """
+    _ensure_bw_env()
+    cmd = ["bw", "list", "items", "--search", "reconx", "--raw", "--session", session]
+    try:
+        proc = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+        raise_on_interrupt_returncode(proc.returncode)
+        combined = (proc.stderr or "") + "\n" + (proc.stdout or "")
+        if proc.returncode == 0:
+            return "ok"
+        if _looks_like_bw_auth_error(combined):
+            return "invalid"
+        return "error"
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except Exception:
+        return "error"
+
+
 def _ensure_bw_session_from_input() -> str | None:
     """
     Опционально запрашивает готовый ключ BW_SESSION (скрытый ввод).
@@ -165,31 +196,51 @@ def _ensure_bw_session_from_input() -> str | None:
     if not (shutil.which("bw") and os.isatty(0) and os.isatty(1)):
         return None
 
-    hidden_prompt = "🔑 Введите BW_SESSION (скрытый ввод, Enter=пропустить): "
-    visible_prompt = "🔑 Вставьте BW_SESSION (видимый ввод, Enter=пропустить): "
+    attempt = 1
+    while True:
+        hidden_prompt = (
+            "🔑 Введите BW_SESSION (скрытый ввод, Enter=пропустить): "
+            if attempt == 1
+            else "🔁 BW_SESSION не подошёл. Введите другой (скрытый, Enter=пропустить): "
+        )
+        visible_prompt = (
+            "🔑 Вставьте BW_SESSION (видимый ввод, Enter=пропустить): "
+            if attempt == 1
+            else "🔁 Вставьте другой BW_SESSION (видимый ввод, Enter=пропустить): "
+        )
 
-    session = ""
-    try:
-        session = getpass.getpass(hidden_prompt).strip()
-    except KeyboardInterrupt:
-        raise
-    except Exception:
         session = ""
-    if not session:
-        # В некоторых терминалах вставка в скрытый prompt getpass может не срабатывать.
         try:
-            session = input(visible_prompt).strip()
+            session = getpass.getpass(hidden_prompt).strip()
         except KeyboardInterrupt:
             raise
         except Exception:
+            session = ""
+        if not session:
+            # В некоторых терминалах вставка в скрытый prompt getpass может не срабатывать.
+            try:
+                session = input(visible_prompt).strip()
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                return None
+        if not session:
             return None
-    if not session:
-        return None
 
-    # Принимаем введённую сессию без pre-check:
-    # в ряде окружений probe может ложно падать по timeout, хотя сессия рабочая.
-    _BW_SESSION_CACHE = session
-    return session
+        probe = _probe_bw_session(session)
+        if probe == "ok":
+            _BW_SESSION_CACHE = session
+            return session
+        if probe == "invalid":
+            print("⚠️  Введённый BW_SESSION не подошёл. Попробуйте другой или Enter для пропуска.")
+            attempt += 1
+            continue
+        if probe == "timeout":
+            print("⚠️  Не удалось быстро проверить BW_SESSION (timeout), использую его и продолжаю.")
+        else:
+            print("⚠️  Не удалось проверить BW_SESSION заранее, использую его и продолжаю.")
+        _BW_SESSION_CACHE = session
+        return session
 
 
 def _bw_find_item_id(item_name: str, session: str | None = None) -> str | None:
