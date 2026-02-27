@@ -126,6 +126,20 @@ def _looks_like_bw_auth_error(text: str) -> bool:
     return any(marker in low for marker in markers)
 
 
+def _looks_like_bw_invalid_session(text: str) -> bool:
+    low = text.lower()
+    markers = (
+        "not logged in",
+        "you are not logged in",
+        "invalid session",
+        "invalid session key",
+        "session key is invalid",
+        "unauthorized",
+        "unauthenticated",
+    )
+    return any(marker in low for marker in markers)
+
+
 def _bw_exec_env() -> dict[str, str]:
     env = os.environ.copy()
     env["BW_NOINTERACTION"] = "true"
@@ -190,7 +204,9 @@ def _probe_bw_session(session: str, timeout: int = 15) -> str:
         combined = (proc.stderr or "") + "\n" + (proc.stdout or "")
         if proc.returncode == 0:
             return "ok"
-        if _looks_like_bw_auth_error(combined):
+        # Для интерактивного prompt считаем "invalid" только по явным
+        # маркерам неверной сессии; lock-состояние может давать ложные срабатывания.
+        if _looks_like_bw_invalid_session(combined):
             return "invalid"
         return "error"
     except subprocess.TimeoutExpired:
