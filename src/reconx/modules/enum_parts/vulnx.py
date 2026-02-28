@@ -186,8 +186,9 @@ def run_vulnx_scan(
         print("vulnx: 0 CVE (нет входных CVE)")
         return
 
-    batch_size = _env_int("RECONX_VULNX_BATCH_SIZE", 5)
-    delay_seconds = _env_float("RECONX_VULNX_BATCH_DELAY", 1.0)
+    # Более тихие и стабильные дефолты под лимиты ProjectDiscovery API.
+    batch_size = _env_int("RECONX_VULNX_BATCH_SIZE", 2)
+    delay_seconds = _env_float("RECONX_VULNX_BATCH_DELAY", 2.0)
     timeout_seconds = _env_int("RECONX_VULNX_TIMEOUT", 90)
 
     input_cves_path.write_text("\n".join(cves) + "\n", encoding="utf-8")
@@ -209,8 +210,8 @@ def run_vulnx_scan(
         if announce_api_key:
             print("⚠️  ProjectDiscovery API key не найден (Bitwarden/provider-config), продолжаю без ключа.")
         # Без ключа API лимиты заметно ниже: переключаемся в более щадящий режим.
-        batch_size = min(batch_size, 6)
-        delay_seconds = max(delay_seconds, 1.2)
+        batch_size = min(batch_size, 2)
+        delay_seconds = max(delay_seconds, 2.5)
 
     records_by_cve: dict[str, dict] = {}
     failed_batches = 0
