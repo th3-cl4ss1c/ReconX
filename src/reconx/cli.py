@@ -451,12 +451,11 @@ def _run_init(args: argparse.Namespace) -> int:
         )
 
         if targets and binaries.get("vulnx"):
-            print("🔐 Проверяю ProjectDiscovery API key (ENV/Bitwarden/provider-config)...")
             projectdiscovery_api_key = load_projectdiscovery_api_key()
             if projectdiscovery_api_key:
                 print("✅ ProjectDiscovery API key загружен.")
             else:
-                print("⚠️  ProjectDiscovery API key не найден (ENV/Bitwarden/provider-config), продолжаю без ключа.")
+                print("⚠️  ProjectDiscovery API key не найден (Bitwarden/provider-config), продолжаю без ключа.")
 
         if args.parse_resolve:
             dnsvalidator_bin = str(binaries.get("dnsvalidator")) if binaries.get("dnsvalidator") else shutil.which("dnsvalidator")

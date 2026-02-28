@@ -349,7 +349,7 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
     _ensure_bw_env()
     # 1) Пытаемся использовать существующую сессию без интерактива.
     sessions: list[str | None] = []
-    env_session = _value_to_string(os.getenv("BW_SESSION"))
+    env_session = _value_to_string(os.getenv("RECONX_BW_SESSION")) or _value_to_string(os.getenv("BW_SESSION"))
     if env_session:
         sessions.append(env_session)
     if _BW_SESSION_CACHE and _BW_SESSION_CACHE not in sessions:
@@ -616,22 +616,13 @@ def run_hunter(domain: str, out_path: Path) -> None:
 def load_projectdiscovery_api_key() -> str | None:
     """
     Загружает API-ключ ProjectDiscovery (для vulnx) из:
-    1) ENV PROJECTDISCOVERY_API_KEY
-       (также поддерживается алиас PDCP_API_KEY)
-    2) Bitwarden item/field (по умолчанию: projectdiscovery/password)
+    1) Bitwarden item/field (по умолчанию: projectdiscovery/password)
        + алиасы project-discovery/project discovery/pdcp
-    3) provider-config.yaml (projectdiscovery/project_discovery/...)
+    2) provider-config.yaml (projectdiscovery/project_discovery/...)
     """
-    # 1) ENV
-    env_key = _value_to_string(os.getenv("PROJECTDISCOVERY_API_KEY")) or _value_to_string(os.getenv("PDCP_API_KEY"))
-    if env_key:
-        os.environ["PROJECTDISCOVERY_API_KEY"] = env_key
-        os.environ["PDCP_API_KEY"] = env_key
-        return env_key
-
     config = _load_provider_config()
 
-    # 2) BW (поддерживаем несколько имён item и алиасы ключей в config)
+    # 1) BW (поддерживаем несколько имён item и алиасы ключей в config)
     bw_item = (
         _value_to_string(os.getenv("RECONX_BW_PROJECTDISCOVERY_ITEM"))
         or _value_to_string(config.get("projectdiscovery_bw_item"))
@@ -670,7 +661,7 @@ def load_projectdiscovery_api_key() -> str | None:
         if warned_after != warned_before and any(warned_after):
             break
 
-    # 3) YAML fallback
+    # 2) YAML fallback
     for cfg_key in (
         "projectdiscovery",
         "project_discovery",

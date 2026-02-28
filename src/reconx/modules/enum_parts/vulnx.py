@@ -204,10 +204,10 @@ def run_vulnx_scan(
         env["PDCP_API_KEY"] = api_key
         env["PROJECTDISCOVERY_API_KEY"] = api_key
         if announce_api_key:
-            print("🔐 ProjectDiscovery API key загружен (ENV/Bitwarden/provider-config).")
+            print("🔐 ProjectDiscovery API key загружен (Bitwarden/provider-config).")
     else:
         if announce_api_key:
-            print("⚠️  ProjectDiscovery API key не найден (ENV/Bitwarden/provider-config), продолжаю без ключа.")
+            print("⚠️  ProjectDiscovery API key не найден (Bitwarden/provider-config), продолжаю без ключа.")
         # Без ключа API лимиты заметно ниже: переключаемся в более щадящий режим.
         batch_size = min(batch_size, 6)
         delay_seconds = max(delay_seconds, 1.2)
