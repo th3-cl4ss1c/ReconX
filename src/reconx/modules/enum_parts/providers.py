@@ -684,8 +684,6 @@ def load_projectdiscovery_api_key() -> str | None:
         warned_before = (_BW_TIMEOUT_WARNED, _BW_ERROR_WARNED, _BW_AUTH_WARNED)
         key = _load_api_key_from_bw(item_name, field=bw_field)
         if key:
-            os.environ["PROJECTDISCOVERY_API_KEY"] = key
-            os.environ["PDCP_API_KEY"] = key
             return key
         warned_after = (_BW_TIMEOUT_WARNED, _BW_ERROR_WARNED, _BW_AUTH_WARNED)
         # Если bw явно недоступен/неавторизован, не делаем лишние попытки по алиасам item.
@@ -702,8 +700,6 @@ def load_projectdiscovery_api_key() -> str | None:
     ):
         key = _value_to_string(config.get(cfg_key))
         if key:
-            os.environ["PROJECTDISCOVERY_API_KEY"] = key
-            os.environ["PDCP_API_KEY"] = key
             return key
     return None
 
