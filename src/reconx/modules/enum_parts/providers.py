@@ -16,6 +16,7 @@ _BW_TIMEOUT_WARNED: bool = False
 _BW_ERROR_WARNED: bool = False
 _BW_AUTH_WARNED: bool = False
 _BW_SESSION_PROMPTED: bool = False
+_BW_SYNCED_KEYS: set[str] = set()
 
 
 def _bw_prompt_enabled() -> bool:
@@ -301,10 +302,38 @@ def _bw_find_item_id(item_name: str, session: str | None = None) -> str | None:
     target = item_name.strip().lower()
     exact = [it for it in items if str(it.get("name", "")).strip().lower() == target]
     candidate = exact[0] if exact else (items[0] if items else None)
-    if not isinstance(candidate, dict):
+    if isinstance(candidate, dict):
+        raw_id = candidate.get("id")
+        return str(raw_id).strip() if raw_id else None
+
+    # Fallback: иногда search не возвращает запись при устаревшем/неполном индексе,
+    # пробуем полный список и точное совпадение имени.
+    proc_all = _bw_run(["list", "items", "--raw"], session=session, timeout=60)
+    if proc_all is None or proc_all.returncode != 0 or not proc_all.stdout.strip():
         return None
-    raw_id = candidate.get("id")
-    return str(raw_id).strip() if raw_id else None
+    try:
+        all_items = json.loads(proc_all.stdout)
+        if not isinstance(all_items, list):
+            return None
+    except Exception:
+        return None
+    for entry in all_items:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "")).strip().lower()
+        if name != target:
+            continue
+        raw_id = entry.get("id")
+        return str(raw_id).strip() if raw_id else None
+    return None
+
+
+def _bw_sync_once(session: str | None) -> None:
+    key = session or "__no_session__"
+    if key in _BW_SYNCED_KEYS:
+        return
+    _BW_SYNCED_KEYS.add(key)
+    _bw_run(["sync"], session=session, timeout=90)
 
 
 def _bw_extract_field(item: dict, field: str) -> str | None:
@@ -359,6 +388,7 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
         sessions.append(None)
 
     for session in sessions:
+        _bw_sync_once(session)
         item_id = _bw_find_item_id(item_name, session=session)
         if not item_id:
             continue
@@ -380,6 +410,7 @@ def _load_api_key_from_bw(item_name: str | None, field: str = "password") -> str
     session = _ensure_bw_session_from_input()
     if not session:
         return None
+    _bw_sync_once(session)
     item_id = _bw_find_item_id(item_name, session=session)
     if not item_id:
         return None
